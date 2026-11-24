@@ -1,0 +1,456 @@
+const { firstOfMonth } = require('../lib/date-helpers');
+const { toAsciiDigits } = require('../lib/arabic');
+
+function createSaleService(pool) {
+  /**
+   * Create a new sale invoice with optional guarantor in an atomic transaction.
+   */
+  async function createSale({ user, saleData }) {
+    const {
+      invoice_number,
+      branch_id,
+      customer_id,
+      address_id,
+      item_details,
+      cash_price = 0,
+      down_payment = 0,
+      monthly_installment,
+      installments_count,
+      discount_amount = 0,
+      delivery_date,
+      first_installment_date,
+      due_day,
+      collection_type = 'فرع',
+      status = 'active',
+      guarantor = null,
+    } = saleData;
+
+    // 1. تحديد الفرع تلقائياً بناءً على صلاحية المستخدم
+    let effectiveBranchId;
+    const userBranch = user?.branch_id ?? user?.branchId;
+    if (userBranch !== null && userBranch !== undefined) {
+      effectiveBranchId = Number(userBranch);
+    } else {
+      if (!branch_id) {
+        throw new Error('حقل الفرع (branch_id) إلزامي للمستخدمين غير المرتبطين بفرع محدد');
+      }
+      effectiveBranchId = Number(branch_id);
+    }
+
+    if (!effectiveBranchId || isNaN(effectiveBranchId) || effectiveBranchId <= 0) {
+      throw new Error('معرف الفرع غير صالح');
+    }
+
+    // 2. التحقق من المدخلات الأساسية
+    const trimmedInvoice = typeof invoice_number === 'string' ? invoice_number.trim() : '';
+    if (!trimmedInvoice) {
+      throw new Error('رقم الفاتورة (invoice_number) إلزامي');
+    }
+
+    const customerIdNum = Number(customer_id);
+    if (!customerIdNum || isNaN(customerIdNum) || customerIdNum <= 0) {
+      throw new Error('معرف العميل (customer_id) إلزامي');
+    }
+
+    const installmentNum = Number(monthly_installment);
+    if (isNaN(installmentNum) || installmentNum < 0) {
+      throw new Error('قيمة القسط الشهري (monthly_installment) غير صالحة');
+    }
+
+    const countNum = parseInt(installments_count, 10);
+    if (isNaN(countNum) || countNum < 1) {
+      throw new Error('عدد الأقساط (installments_count) يجب أن يكون 1 على الأقل');
+    }
+
+    if (!first_installment_date) {
+      throw new Error('تاريخ أول قسط (first_installment_date) إلزامي');
+    }
+
+    const cashPriceNum = Number(cash_price) || 0;
+    const downPaymentNum = Number(down_payment) || 0;
+    const discountNum = Number(discount_amount) || 0;
+    const totalAmount = downPaymentNum + (installmentNum * countNum) - discountNum;
+
+    // احتساب يوم الاستحقاق
+    let effectiveDueDay = due_day ? parseInt(due_day, 10) : null;
+    if (!effectiveDueDay || effectiveDueDay < 1 || effectiveDueDay > 31) {
+      const matchDay = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(first_installment_date));
+      effectiveDueDay = matchDay ? parseInt(matchDay[3], 10) : 1;
+    }
+
+    const effectiveDeliveryDate = delivery_date || first_installment_date;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // فحص وجود العميل
+      const custCheck = await client.query('SELECT id FROM customers WHERE id = $1', [customerIdNum]);
+      if (custCheck.rows.length === 0) {
+        throw new Error('العميل المحدد غير موجود');
+      }
+
+      // فحص العنوان الحالي إذا لم يُرسل address_id
+      let effectiveAddressId = address_id ? Number(address_id) : null;
+      if (!effectiveAddressId) {
+        const addrCheck = await client.query(
+          'SELECT id FROM customer_addresses WHERE customer_id = $1 AND is_current = TRUE LIMIT 1',
+          [customerIdNum]
+        );
+        if (addrCheck.rows.length > 0) {
+          effectiveAddressId = addrCheck.rows[0].id;
+        }
+      }
+
+      // إدخال سجل الفاتورة في sales
+      const saleRes = await client.query(
+        `INSERT INTO sales (
+           invoice_number, branch_id, customer_id, address_id, item_details,
+           cash_price, down_payment, monthly_installment, installments_count, discount_amount,
+           total_amount, delivery_date, first_installment_date, due_day, collection_type, status,
+           created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
+         RETURNING *`,
+        [
+          trimmedInvoice,
+          effectiveBranchId,
+          customerIdNum,
+          effectiveAddressId,
+          item_details || null,
+          cashPriceNum,
+          downPaymentNum,
+          installmentNum,
+          countNum,
+          discountNum,
+          totalAmount,
+          effectiveDeliveryDate,
+          first_installment_date,
+          effectiveDueDay,
+          collection_type,
+          status,
+        ]
+      );
+      const sale = saleRes.rows[0];
+
+      // إدخال الضامن وأرقامه إن وُجد
+      let insertedGuarantor = null;
+      if (guarantor && typeof guarantor === 'object' && guarantor.name && guarantor.name.trim()) {
+        const gName = guarantor.name.trim();
+        const gRes = await client.query(
+          `INSERT INTO guarantors (sale_id, name, created_at)
+           VALUES ($1, $2, NOW())
+           RETURNING id, sale_id, name, created_at`,
+          [sale.id, gName]
+        );
+        const gRecord = gRes.rows[0];
+        const insertedGPhones = [];
+
+        if (Array.isArray(guarantor.phones) && guarantor.phones.length > 0) {
+          for (let i = 0; i < guarantor.phones.length; i++) {
+            const pItem = guarantor.phones[i];
+            const rawPhone = typeof pItem === 'object' && pItem !== null ? pItem.phone : pItem;
+            const phoneStr = toAsciiDigits(String(rawPhone || '')).replace(/\s+/g, '');
+
+            if (phoneStr) {
+              const isPrimary = typeof pItem === 'object' && pItem !== null && typeof pItem.is_primary === 'boolean'
+                ? pItem.is_primary
+                : i === 0;
+              const label = typeof pItem === 'object' && pItem !== null && pItem.label ? String(pItem.label).trim() : null;
+
+              const phoneRes = await client.query(
+                `INSERT INTO phone_numbers (guarantor_id, phone, is_primary, label, created_at)
+                 VALUES ($1, $2, $3, $4, NOW())
+                 RETURNING id, phone, is_primary, label`,
+                [gRecord.id, phoneStr, isPrimary, label]
+              );
+              insertedGPhones.push(phoneRes.rows[0]);
+            }
+          }
+        }
+
+        insertedGuarantor = {
+          ...gRecord,
+          phones: insertedGPhones,
+        };
+      }
+
+      await client.query('COMMIT');
+
+      return {
+        ...sale,
+        guarantor: insertedGuarantor,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err.code === '23505' && err.constraint?.includes('invoice_number')) {
+        throw new Error('رقم الفاتورة مسجل مسبقاً في النظام');
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Record a payment for an active sale and update sale status to completed if fully settled.
+   */
+  async function recordPayment({ user, saleId, amount, paymentDate, notes = null }) {
+    const saleIdNum = Number(saleId);
+    if (!saleIdNum || isNaN(saleIdNum) || saleIdNum <= 0) {
+      throw new Error('معرف الفاتورة (saleId) غير صالح');
+    }
+
+    const amountNum = Number(amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      throw new Error('قيمة الدفعة (amount) يجب أن تكون أكبر من صفر');
+    }
+
+    const effectiveDate = paymentDate || new Date().toISOString().slice(0, 10);
+    const paymentMonth = firstOfMonth(effectiveDate);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // قفل سجل الفاتورة لمنع التضارب أثناء الدفع وفحص صلاحية الفرع
+      const saleCheck = await client.query(
+        'SELECT id, branch_id, monthly_installment, installments_count, discount_amount, status FROM sales WHERE id = $1 FOR UPDATE',
+        [saleIdNum]
+      );
+
+      if (saleCheck.rows.length === 0) {
+        throw new Error('الفاتورة المحددة غير موجودة');
+      }
+
+      const sale = saleCheck.rows[0];
+
+      // عزل الفروع: التأكد من أن موظف الفرع لا يستطيع تسجيل دفعة على فاتورة فرع آخر
+      const userBranch = user?.branch_id ?? user?.branchId;
+      if (userBranch !== null && userBranch !== undefined && Number(sale.branch_id) !== Number(userBranch)) {
+        const forbiddenErr = new Error('غير مصرح لك بتسجيل دفعة على فاتورة تخص فرع آخر');
+        forbiddenErr.statusCode = 403;
+        throw forbiddenErr;
+      }
+
+      const monthlyInstallment = Number(sale.monthly_installment) || 0;
+      const installmentsCount = Number(sale.installments_count) || 0;
+      const discountAmount = Number(sale.discount_amount) || 0;
+      // الأقساط المطلوبة فقط (بدون المقدم الذي يُدفع وقت البيع ولا يدخل في payments)
+      const requiredInstallmentsTotal = Math.max(0, (monthlyInstallment * installmentsCount) - discountAmount);
+
+      // إدخال الدفعة في جدول payments
+      const payRes = await client.query(
+        `INSERT INTO payments (sale_id, amount, payment_month, payment_date, notes, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         RETURNING id, sale_id, amount, payment_month, payment_date, notes, created_at`,
+        [saleIdNum, amountNum, paymentMonth, effectiveDate, notes ? String(notes).trim() : null]
+      );
+      const payment = payRes.rows[0];
+
+      // حساب إجمالي المدفوعات التراكمي للأقساط
+      const totalRes = await client.query(
+        'SELECT COALESCE(SUM(amount), 0) AS total_paid FROM payments WHERE sale_id = $1',
+        [saleIdNum]
+      );
+      const totalPaid = Number(totalRes.rows[0].total_paid);
+      const remainingBalance = Math.max(0, requiredInstallmentsTotal - totalPaid);
+
+      // لو إجمالي المدفوع سدّد كامل الأقساط المطلوبة: حوّل الحالة لـ completed
+      let currentStatus = sale.status;
+      if (totalPaid >= requiredInstallmentsTotal && requiredInstallmentsTotal > 0 && currentStatus !== 'completed') {
+        const updateRes = await client.query(
+          `UPDATE sales SET status = 'completed', updated_at = NOW() WHERE id = $1 RETURNING status`,
+          [saleIdNum]
+        );
+        currentStatus = updateRes.rows[0].status;
+      }
+
+      await client.query('COMMIT');
+
+      return {
+        payment,
+        summary: {
+          sale_id: saleIdNum,
+          required_installments_total: requiredInstallmentsTotal,
+          total_paid: totalPaid,
+          remaining_balance: remainingBalance,
+          sale_status: currentStatus,
+          is_completed: currentStatus === 'completed',
+        },
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Query overdue active sales using the sale_balances SQL view with branch security & pagination.
+   */
+  async function getOverdueSales({ user, query = {} }) {
+    const { branch_id, due_day, page = 1, limit = 20 } = query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    // 1. تحديد الفرع تلقائياً: لو موظف فرع، يُجبر على فرعه فقط
+    let effectiveBranchId = null;
+    const userBranch = user?.branch_id ?? user?.branchId;
+    if (userBranch !== null && userBranch !== undefined) {
+      effectiveBranchId = Number(userBranch);
+    } else if (branch_id) {
+      effectiveBranchId = Number(branch_id);
+    }
+
+    const conditions = ["sb.status = 'active'", "sb.overdue_amount > 0"];
+    const params = [];
+
+    if (effectiveBranchId) {
+      params.push(effectiveBranchId);
+      conditions.push(`sb.branch_id = $${params.length}`);
+    }
+
+    if (due_day !== undefined && due_day !== null && due_day !== '') {
+      const dueDayNum = parseInt(due_day, 10);
+      if (!isNaN(dueDayNum) && dueDayNum >= 1 && dueDayNum <= 31) {
+        params.push(dueDayNum);
+        conditions.push(`sb.due_day = $${params.length}`);
+      }
+    }
+
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+    // استعلام العدد الإجمالي
+    const countSql = `SELECT COUNT(*) AS total FROM sale_balances sb ${whereClause}`;
+    const countRes = await pool.query(countSql, params);
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+    // استعلام البيانات مع بيانات العميل والفرع وأحدث ملاحظة
+    const dataParams = [...params, limitNum, offset];
+    const limitParamIdx = dataParams.length - 1;
+    const offsetParamIdx = dataParams.length;
+
+    const dataSql = `
+      SELECT 
+        sb.sale_id,
+        sb.invoice_number,
+        sb.branch_id,
+        b.name AS branch_name,
+        sb.customer_id,
+        c.customer_code,
+        c.name AS customer_name,
+        (
+          SELECT pn.phone 
+          FROM phone_numbers pn 
+          WHERE pn.customer_id = sb.customer_id 
+          ORDER BY pn.is_primary DESC, pn.id ASC 
+          LIMIT 1
+        ) AS primary_phone,
+        sb.item_details,
+        sb.monthly_installment,
+        sb.installments_count,
+        sb.first_installment_date,
+        sb.due_day,
+        sb.total_paid,
+        sb.required_installments_total,
+        sb.remaining_amount,
+        sb.due_installments,
+        sb.due_amount,
+        sb.overdue_amount,
+        (
+          SELECT json_build_object(
+            'id', sn.id,
+            'note_type', sn.note_type,
+            'content', sn.content,
+            'follow_up_date', sn.follow_up_date,
+            'created_at', sn.created_at
+          )
+          FROM sale_notes sn
+          WHERE sn.sale_id = sb.sale_id
+          ORDER BY sn.id DESC
+          LIMIT 1
+        ) AS latest_note
+      FROM sale_balances sb
+      JOIN customers c ON c.id = sb.customer_id
+      LEFT JOIN branches b ON b.id = sb.branch_id
+      ${whereClause}
+      ORDER BY sb.overdue_amount DESC, sb.due_day ASC
+      LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
+    `;
+
+    const dataRes = await pool.query(dataSql, dataParams);
+
+    return {
+      data: dataRes.rows,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 1,
+      },
+    };
+  }
+
+  /**
+   * Add a follow-up note to a sale.
+   */
+  async function addSaleNote({ user, saleId, noteData }) {
+    const saleIdNum = Number(saleId);
+    if (!saleIdNum || isNaN(saleIdNum) || saleIdNum <= 0) {
+      throw new Error('معرف الفاتورة (saleId) غير صالح');
+    }
+
+    const { content, note_type = 'call', follow_up_date = null } = noteData || {};
+
+    const trimmedContent = typeof content === 'string' ? content.trim() : '';
+    if (!trimmedContent) {
+      throw new Error('محتوى الملاحظة (content) إلزامي');
+    }
+
+    const allowedTypes = ['call', 'visit', 'inquiry', 'legal', 'general', 'legacy_import'];
+    const effectiveNoteType = allowedTypes.includes(note_type) ? note_type : 'call';
+
+    // فحص وجود الفاتورة وعزل الفروع
+    const saleCheck = await pool.query('SELECT id, branch_id FROM sales WHERE id = $1', [saleIdNum]);
+    if (saleCheck.rows.length === 0) {
+      throw new Error('الفاتورة المحددة غير موجودة');
+    }
+
+    const sale = saleCheck.rows[0];
+    const userBranch = user?.branch_id ?? user?.branchId;
+    if (userBranch !== null && userBranch !== undefined && Number(sale.branch_id) !== Number(userBranch)) {
+      const forbiddenErr = new Error('غير مصرح لك بتسجيل ملاحظة على فاتورة تخص فرع آخر');
+      forbiddenErr.statusCode = 403;
+      throw forbiddenErr;
+    }
+
+    const insertSql = `
+      INSERT INTO sale_notes (sale_id, created_by_user_id, note_type, content, follow_up_date, created_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      RETURNING id, sale_id, created_by_user_id, note_type, content, follow_up_date, created_at
+    `;
+
+    const res = await pool.query(insertSql, [
+      saleIdNum,
+      user?.id || null,
+      effectiveNoteType,
+      trimmedContent,
+      follow_up_date || null,
+    ]);
+
+    return res.rows[0];
+  }
+
+  return {
+    createSale,
+    recordPayment,
+    getOverdueSales,
+    addSaleNote,
+  };
+}
+
+module.exports = {
+  createSaleService,
+};
