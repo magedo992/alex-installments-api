@@ -9,6 +9,7 @@ const { createAuthRoutes } = require('./routes/auth.route');
 const { createCustomerRoutes } = require('./routes/customer.route');
 const { createSaleRoutes } = require('./routes/sale.route');
 const { createProtect, restrictTo } = require('./middlewares/auth.middleware');
+const { startKeepAlive } = require('./lib/keep-alive');
 
 const { composeAuth } = require('./service/auth.service');
 
@@ -55,6 +56,10 @@ app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Alex Project API' });
 });
 
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
+
 app.use('/api', apiLimiter);
 
 app.use('/api/auth', createAuthRoutes(auth, authLimiter, protect, restrictTo));
@@ -97,6 +102,9 @@ const server = app.listen(PORT, async () => {
   } else {
     console.warn(`[Database] Warning: ${connResult.message}`);
   }
+
+  // بدء خدمة الحفاظ على نشاط السيرفر (Render Keep-Alive)
+  startKeepAlive();
 });
 
 module.exports = { app, server };

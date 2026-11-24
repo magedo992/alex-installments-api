@@ -245,6 +245,15 @@ node scripts/create-admin.js
   npm start
   ```
 
+### 7. إبقاء السيرفر نشطاً على الاستضافات المجانية (Render Keep-Alive)
+* يقوم السيرفر ذاتياً بإرسال فحص صحي دوري إلى المسار `/health` كل 10 دقائق لمنع الدخول في وضع السكون (Sleep mode على Render Free Tier)، وذلك تلقائياً بمجرد توفر متغير البيئة `RENDER_EXTERNAL_URL` (الذي تضعه منصة Render تلقائياً) أو `SERVER_URL`.
+* يتوفر أيضاً سكربت خارجي مستقل لتشغيل فحص دوري خارجي:
+  ```bash
+  node scripts/ping-server.js https://alex-installments-api.onrender.com
+  # أو تعيين SERVER_URL في .env وتشغيل:
+  npm run keep-alive
+  ```
+
 ---
 
 ## 📖 التوثيق التفاعلي واختبار الـ API (Swagger UI)

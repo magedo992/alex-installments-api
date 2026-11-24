@@ -9,7 +9,8 @@
     "test:db": "node src/config/verify-db.js",
     "test": "node --test",
     "build": "node scripts/build.js",
-    "db:migrate": "node scripts/migrate.js"
+    "db:migrate": "node scripts/migrate.js",
+    "keep-alive": "node scripts/ping-server.js"
   },
   "keywords": [],
   "type": "commonjs",
@@ -25,7 +26,6 @@
     "express-rate-limit": "^8.7.5",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
-    "jwt": "^0.2.0",
     "multer": "^2.5.0",
     "nodemon": "^3.1.14",
     "pg": "^8.23.1",
