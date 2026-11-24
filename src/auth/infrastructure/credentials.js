@@ -10,7 +10,6 @@ const passwords = {
 function createJwtTokens(secret) {
   return {
     issue: (claims) => jwt.sign(claims, secret, { expiresIn: '30d', algorithm: 'HS256' }),
-    // The stored session binds the account to its device even after expiry.
     readDevice: (token) => jwt.decode(token)?.deviceId,
     verify(token) {
       if (!secret) throw new Error('JWT_SECRET is missing');

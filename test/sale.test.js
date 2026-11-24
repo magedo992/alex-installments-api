@@ -73,7 +73,6 @@ test('POST /api/sales rejects unauthenticated requests', async () => {
 });
 
 test('POST /api/sales creates sale with transaction and applies branch rules', async () => {
-  // 1. تجربة موظف الفرع (فرع 2): يتجاهل فرع 1 المرسل في الـ body ويثبت فرع 2
   const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
 
   let capturedBranchId = null;
@@ -141,7 +140,7 @@ test('POST /api/sales creates sale with transaction and applies branch rules', a
   try {
     const payload = {
       invoice_number: 'INV-TEST-001',
-      branch_id: 1, // يحاول يرسل فرع 1
+      branch_id: 1,
       customer_id: 10,
       item_details: 'ثلاجة شارب 16 قدم',
       cash_price: 15000,
@@ -170,9 +169,9 @@ test('POST /api/sales creates sale with transaction and applies branch rules', a
     assert.equal(res.status, 201);
     const body = await res.json();
     assert.equal(body.success, true);
-    assert.equal(capturedBranchId, 2); // ثبت فرع الموظف وليس 1
+    assert.equal(capturedBranchId, 2);
     assert.equal(body.data.branch_id, 2);
-    assert.equal(body.data.total_amount, 17400); // 3000 + (1200 * 12)
+    assert.equal(body.data.total_amount, 17400);
     assert.equal(insertedGuarantor, true);
     assert.equal(insertedGPhone, true);
     assert.equal(body.data.guarantor.name, 'محمود السيد عبد الله');
@@ -220,7 +219,7 @@ test('POST /api/sales/:id/payments records payment and updates sale status to co
 
   let saleStatus = 'active';
   const targetTotal = 5000;
-  let cumulativePaid = 4000; // مسدد 4000 من قبل، والدفعة الحالية 1000 ستكمله
+  let cumulativePaid = 4000;
 
   const fakeClient = {
     async query(sql, params) {
@@ -296,7 +295,7 @@ test('POST /api/sales/:id/payments records payment and updates sale status to co
     const body = await res.json();
     assert.equal(body.success, true);
     assert.equal(body.data.payment.amount, 1000);
-    assert.equal(body.data.payment.payment_month, '2026-11-01'); // حسابه التلقائي أول الشهر
+    assert.equal(body.data.payment.payment_month, '2026-11-01');
     assert.equal(body.data.summary.required_installments_total, 5000);
     assert.equal(body.data.summary.total_paid, 5000);
     assert.equal(body.data.summary.remaining_balance, 0);
@@ -308,7 +307,6 @@ test('POST /api/sales/:id/payments records payment and updates sale status to co
 });
 
 test('GET /api/sales/overdue enforces branch security and returns overdue list', async () => {
-  // موظف فرع 2
   const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
 
   let capturedParams = [];
@@ -362,7 +360,6 @@ test('GET /api/sales/overdue enforces branch security and returns overdue list',
   const baseUrl = `http://127.0.0.1:${port}/api/sales/overdue`;
 
   try {
-    // يحاول يفلتر بـ branch_id=1 و due_day=5
     const res = await fetch(`${baseUrl}?branch_id=1&due_day=5&page=1&limit=10`, {
       method: 'GET',
       headers: {
@@ -374,7 +371,6 @@ test('GET /api/sales/overdue enforces branch security and returns overdue list',
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.success, true);
-    // تأكيد أن الفرع 2 للموظف تم تثبيته وليس فرع 1
     assert.equal(capturedParams[0], 2);
     assert.equal(capturedParams[1], 5);
     assert.equal(body.data.length, 1);
@@ -424,7 +420,6 @@ test('POST /api/sales/:id/notes records follow-up note with user id and follow_u
   const baseUrl = `http://127.0.0.1:${port}/api/sales/10/notes`;
 
   try {
-    // 1. بدون محتوى يرفض بـ 400
     const badRes = await fetch(baseUrl, {
       method: 'POST',
       headers: {
@@ -436,7 +431,6 @@ test('POST /api/sales/:id/notes records follow-up note with user id and follow_u
     });
     assert.equal(badRes.status, 400);
 
-    // 2. إرسال ملاحظة كاملة وتاريخ متابعة
     const goodRes = await fetch(baseUrl, {
       method: 'POST',
       headers: {
@@ -471,7 +465,6 @@ test('Validation middleware rejects invalid Egyptian phone, negative amounts, an
   const port = server.address().port;
 
   try {
-    // 1. إنشاء فاتورة بقسط شهري سالب
     const resNegative = await fetch(`http://127.0.0.1:${port}/api/sales`, {
       method: 'POST',
       headers: {
@@ -482,7 +475,7 @@ test('Validation middleware rejects invalid Egyptian phone, negative amounts, an
       body: JSON.stringify({
         invoice_number: 'INV-VALID-01',
         customer_id: 1,
-        monthly_installment: -500, // غير صالح
+        monthly_installment: -500,
         installments_count: 5,
         first_installment_date: '2026-12-01',
       }),
@@ -492,7 +485,6 @@ test('Validation middleware rejects invalid Egyptian phone, negative amounts, an
     assert.equal(bodyNeg.success, false);
     assert.equal(bodyNeg.errors.some((e) => e.field === 'monthly_installment'), true);
 
-    // 2. إنشاء فاتورة بصيغة تاريخ غير صحيحة
     const resBadDate = await fetch(`http://127.0.0.1:${port}/api/sales`, {
       method: 'POST',
       headers: {
@@ -505,14 +497,13 @@ test('Validation middleware rejects invalid Egyptian phone, negative amounts, an
         customer_id: 1,
         monthly_installment: 500,
         installments_count: 5,
-        first_installment_date: '01-12-2026', // صيغة خطأ
+        first_installment_date: '01-12-2026',
       }),
     });
     assert.equal(resBadDate.status, 400);
     const bodyDate = await resBadDate.json();
     assert.equal(bodyDate.errors.some((e) => e.field === 'first_installment_date'), true);
 
-    // 3. تسجيل دفعة بمبلغ صفر
     const resZeroPay = await fetch(`http://127.0.0.1:${port}/api/sales/1/payments`, {
       method: 'POST',
       headers: {
@@ -529,18 +520,16 @@ test('Validation middleware rejects invalid Egyptian phone, negative amounts, an
 });
 
 test('Branch scoping strictly blocks cross-branch payments and notes with 403 Forbidden', async () => {
-  // موظف فرع 2 (الاصلاح)
   const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
 
   const fakeClient = {
     async query(sql) {
-      // الفاتورة تتبع فرع 1 (الحمد)
       if (sql.includes('SELECT id, branch_id, monthly_installment')) {
         return {
           rows: [
             {
               id: 99,
-              branch_id: 1, // فرع 1 مختلف عن فرع الموظف 2
+              branch_id: 1,
               monthly_installment: 1000,
               installments_count: 10,
               discount_amount: 0,
@@ -554,7 +543,7 @@ test('Branch scoping strictly blocks cross-branch payments and notes with 403 Fo
           rows: [
             {
               id: 99,
-              branch_id: 1, // فرع 1 مختلف عن فرع الموظف 2
+              branch_id: 1,
             },
           ],
         };
@@ -578,7 +567,6 @@ test('Branch scoping strictly blocks cross-branch payments and notes with 403 Fo
   const port = server.address().port;
 
   try {
-    // 1. محاولة تسجيل دفعة على فاتورة فرع آخر
     const resPay = await fetch(`http://127.0.0.1:${port}/api/sales/99/payments`, {
       method: 'POST',
       headers: {
@@ -593,7 +581,6 @@ test('Branch scoping strictly blocks cross-branch payments and notes with 403 Fo
     assert.equal(payBody.success, false);
     assert.match(payBody.message, /غير مصرح لك بتسجيل دفعة على فاتورة تخص فرع آخر/);
 
-    // 2. محاولة تسجيل ملاحظة على فاتورة فرع آخر
     const resNote = await fetch(`http://127.0.0.1:${port}/api/sales/99/notes`, {
       method: 'POST',
       headers: {

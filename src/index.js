@@ -12,22 +12,23 @@ const { createProtect, restrictTo } = require('./middlewares/auth.middleware');
 
 const { composeAuth } = require('./service/auth.service');
 
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim().length < 32) {
+  throw new Error('FATAL: JWT_SECRET environment variable is missing or shorter than 32 characters');
+}
+
 const auth = composeAuth(pool, process.env.JWT_SECRET);
 const protect = createProtect(auth);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Security: HTTP headers protection
 app.use(helmet());
 
-// Security: CORS policy
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-device-id'],
 }));
 
-// Security: Rate limiting
 const skipInTest = () => process.env.NODE_ENV === 'test';
 
 const apiLimiter = rateLimit({
@@ -54,10 +55,9 @@ app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Alex Project API' });
 });
 
-// Apply API Rate Limiter
 app.use('/api', apiLimiter);
 
-app.use('/api/auth', createAuthRoutes(auth, authLimiter));
+app.use('/api/auth', createAuthRoutes(auth, authLimiter, protect, restrictTo));
 app.use('/api/customers', createCustomerRoutes(pool, protect));
 app.use('/api/sales', createSaleRoutes(pool, protect));
 
@@ -72,7 +72,6 @@ app.get('/api/admin-only', protect, restrictTo('admin'), (req, res) => {
   res.json({ message: 'أهلاً بك في لوحة الأدمن' });
 });
 
-// Security: Global Error Handler preventing stack traces or DB leakage
 app.use((err, req, res, next) => {
   console.error('[GlobalErrorHandler]', err);
   if (err.type === 'entity.parse.failed') {
@@ -90,9 +89,6 @@ const server = app.listen(PORT, async () => {
   console.log(`[Server] Server is running on port ${PORT}`);
   console.log(`[Swagger] Documentation available at http://localhost:${PORT}/api-docs`);
 
-  if (!process.env.JWT_SECRET) {
-    console.warn('[Auth] Warning: JWT_SECRET is missing in .env!');
-  }
 
   console.log('[Database] Verifying Neon Postgres connection...');
   const connResult = await verifyConnection();

@@ -67,11 +67,9 @@ test('Customer endpoints strictly reject requests without token or device id', a
   const baseUrl = `http://127.0.0.1:${port}/api/customers`;
 
   try {
-    // 1. Missing both Authorization and x-device-id
     const res1 = await fetch(baseUrl, { method: 'GET' });
     assert.equal(res1.status, 401);
 
-    // 2. Has token but missing x-device-id
     const res2 = await fetch(baseUrl, {
       method: 'GET',
       headers: {
@@ -80,7 +78,6 @@ test('Customer endpoints strictly reject requests without token or device id', a
     });
     assert.equal(res2.status, 401);
 
-    // 3. Has token and wrong x-device-id
     const res3 = await fetch(baseUrl, {
       method: 'GET',
       headers: {
@@ -244,7 +241,6 @@ test('GET /api/customers searches with query and returns paginated list', async 
 });
 
 test('POST /api/customers enforces branch employee branch_id over request body', async () => {
-  // الموظف مربوط بفرع 2 (الاصلاح)
   const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
 
   let capturedBranchId = null;
@@ -288,7 +284,6 @@ test('POST /api/customers enforces branch employee branch_id over request body',
   const baseUrl = `http://127.0.0.1:${port}/api/customers`;
 
   try {
-    // يبعت branch_id: 1 (الحمد) في الـ body، لكن بما أنه موظف فرع 2، يجب أن يسجل على فرع 2
     const res = await fetch(baseUrl, {
       method: 'POST',
       headers: {
@@ -314,7 +309,6 @@ test('POST /api/customers enforces branch employee branch_id over request body',
 });
 
 test('POST /api/customers requires branch_id for admin and accepts valid branch', async () => {
-  // مستخدم أدمن غير مرتبط بفرع محدد (branchId = null)
   const { auth, validToken, deviceId } = createAuthFixture({ role: 'admin', branchId: null });
 
   let capturedBranchId = null;
@@ -358,7 +352,6 @@ test('POST /api/customers requires branch_id for admin and accepts valid branch'
   const baseUrl = `http://127.0.0.1:${port}/api/customers`;
 
   try {
-    // 1. الأدمن يبعت بدون branch_id -> يُرفض بـ 400 Bad Request
     const resWithoutBranch = await fetch(baseUrl, {
       method: 'POST',
       headers: {
@@ -375,7 +368,6 @@ test('POST /api/customers requires branch_id for admin and accepts valid branch'
     assert.equal(errBody.success, false);
     assert.match(errBody.message, /إلزامي/);
 
-    // 2. الأدمن يبعت مع branch_id: 3 -> ينجح بـ 201
     const resWithBranch = await fetch(baseUrl, {
       method: 'POST',
       headers: {
@@ -406,7 +398,6 @@ test('POST /api/customers rejects invalid phone numbers or short customer names 
   const baseUrl = `http://127.0.0.1:${port}/api/customers`;
 
   try {
-    // 1. اسم العميل حرف واحد فقط
     const resShortName = await fetch(baseUrl, {
       method: 'POST',
       headers: {
@@ -420,7 +411,6 @@ test('POST /api/customers rejects invalid phone numbers or short customer names 
     const bodyShort = await resShortName.json();
     assert.equal(bodyShort.errors.some((e) => e.field === 'name'), true);
 
-    // 2. رقم هاتف غير صالح (مش 11 رقم أو مش 01)
     const resBadPhone = await fetch(baseUrl, {
       method: 'POST',
       headers: {

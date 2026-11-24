@@ -1,11 +1,11 @@
 const { AuthError } = require('../domain/input');
 
 function createPostgresUsers(pool) {
-  async function create({ username, email, passwordHash, deviceId }) {
+  async function create({ username, email, passwordHash, deviceId, role = 'employee', branchId = null }) {
     try {
       const { rows: [user] } = await pool.query(
-        'INSERT INTO public.users (username, email, password, device_id) VALUES ($1, $2, $3, $4) RETURNING id, username, email, role',
-        [username, email, passwordHash, deviceId]
+        'INSERT INTO public.users (username, email, password, device_id, role, branch_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, username, email, role, branch_id AS "branchId"',
+        [username, email, passwordHash, deviceId, role, branchId]
       );
       return user;
     } catch (error) {
@@ -39,7 +39,13 @@ function createPostgresUsers(pool) {
     return session;
   }
 
-  return { create, findByEmail, replaceToken, findSession };
+  async function branchExists(branchId) {
+    if (!branchId) return false;
+    const { rows } = await pool.query('SELECT 1 FROM public.branches WHERE id = $1', [branchId]);
+    return rows.length > 0;
+  }
+
+  return { create, findByEmail, replaceToken, findSession, branchExists };
 }
 
 module.exports = { createPostgresUsers };

@@ -1,14 +1,8 @@
 const { z } = require('zod');
 const { toAsciiDigits } = require('../lib/arabic');
 
-/**
- * Creates an Express middleware to validate request data against a Zod schema.
- * @param {z.ZodSchema} schema - The Zod schema to validate against.
- * @param {'body'|'query'|'params'} [source='body'] - The part of request to validate.
- */
 function validate(schema, source = 'body') {
   return (req, res, next) => {
-    // Clean Arabic/Eastern digits in strings before validation if validating body
     if (source === 'body' && req.body && typeof req.body === 'object') {
       sanitizeEasternDigits(req.body);
     }
@@ -33,9 +27,6 @@ function validate(schema, source = 'body') {
   };
 }
 
-/**
- * Recursively converts Eastern Arabic digits to ASCII digits in objects.
- */
 function sanitizeEasternDigits(obj) {
   for (const key of Object.keys(obj)) {
     const val = obj[key];
@@ -51,7 +42,6 @@ function sanitizeEasternDigits(obj) {
   }
 }
 
-// Egyptian phone regex: 010, 011, 012, 015 followed by 8 digits (11 digits total), or 7-9 digit landlines with area code
 const phoneRegex = /^(01[0125][0-9]{8}|0[2-9][0-9]{7,8})$/;
 
 const phoneSchema = z.union([
@@ -68,6 +58,28 @@ const addressSchema = z.object({
   housing_type: z.string().max(50, 'نوع السكن طويل جداً').optional().nullable(),
   address_details: z.string().max(500, 'تفاصيل العنوان طويلة جداً').optional().nullable(),
 }).optional().nullable();
+
+const registerUserSchema = z.object({
+  username: z.string({ required_error: 'اسم المستخدم إلزامي' }).min(1, 'اسم المستخدم إلزامي').max(100, 'اسم المستخدم طويل جداً').trim(),
+  email: z.string({ required_error: 'البريد الإلكتروني إلزامي' }).email('أدخل بريداً إلكترونياً صالحاً').max(254).trim(),
+  password: z.string({ required_error: 'كلمة المرور إلزامية' }).min(8, 'كلمة المرور يجب ألا تقل عن 8 أحرف').max(72, 'كلمة المرور لا تتجاوز 72 حرفاً'),
+  role: z.enum(['admin', 'employee', 'accountant'], {
+    invalid_type_error: 'الدور يجب أن يكون admin أو employee أو accountant',
+  }).optional().default('employee'),
+  branch_id: z.number({ invalid_type_error: 'معرف الفرع يجب أن يكون رقماً' }).int().positive('معرف الفرع يجب أن يكون رقماً موجباً').optional().nullable(),
+}).strict()
+.refine(
+  (data) => {
+    if (data.role === 'employee') {
+      return typeof data.branch_id === 'number' && Number.isInteger(data.branch_id) && data.branch_id > 0;
+    }
+    return true;
+  },
+  {
+    message: 'حقل الفرع (branch_id) إلزامي لموظف الفرع ويجب أن يكون رقماً صحيحاً موجباً',
+    path: ['branch_id'],
+  }
+);
 
 const createCustomerSchema = z.object({
   branch_id: z.number({ invalid_type_error: 'معرف الفرع يجب أن يكون رقماً' }).int().positive('معرف الفرع يجب أن يكون رقماً موجباً').optional(),
@@ -130,6 +142,7 @@ const addNoteSchema = z.object({
 
 module.exports = {
   validate,
+  registerUserSchema,
   createCustomerSchema,
   searchCustomerSchema,
   createSaleSchema,

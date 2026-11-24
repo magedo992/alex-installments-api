@@ -16,7 +16,6 @@ function createSaleRoutes(pool, protect) {
 
   router.use(express.json());
 
-  // مسارات الفواتير والدفعات والمتأخرات والمتابعات (محمية بالتوكين وبصمة الجهاز ومفحوصة بالـ Validation)
   router.post('/', protect, validate(createSaleSchema), controller.create);
   router.post('/:id/payments', protect, validate(recordPaymentSchema), controller.recordPayment);
   router.get('/overdue', protect, validate(overdueSalesSchema, 'query'), controller.getOverdue);

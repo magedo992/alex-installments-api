@@ -1,9 +1,6 @@
 const { normalizeArabic, toAsciiDigits } = require('../lib/arabic');
 
 function createCustomerService(pool) {
-  /**
-   * Create a new customer with auto-incremented branch code in a single atomic transaction.
-   */
   async function createCustomer(data) {
     const { branch_id, name, phones = [], address = null, risk_level = null, general_note = null } = data;
 
@@ -20,7 +17,6 @@ function createCustomerService(pool) {
     try {
       await client.query('BEGIN');
 
-      // 1. التحديث التسلسلي الآمن لعداد الفرع
       const branchRes = await client.query(
         `UPDATE branches 
          SET last_number = last_number + 1 
@@ -37,7 +33,6 @@ function createCustomerService(pool) {
       const customerCode = String(branch.last_number);
       const normalizedName = normalizeArabic(trimmedName);
 
-      // 2. إدخال العميل في جدول customers
       const custRes = await client.query(
         `INSERT INTO customers (customer_code, name, normalized_name, risk_level, general_note, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
@@ -46,7 +41,6 @@ function createCustomerService(pool) {
       );
       const customer = custRes.rows[0];
 
-      // 3. إدخال أرقام الهواتف إن وجدت
       const insertedPhones = [];
       if (Array.isArray(phones) && phones.length > 0) {
         for (let i = 0; i < phones.length; i++) {
@@ -71,7 +65,6 @@ function createCustomerService(pool) {
         }
       }
 
-      // 4. إدخال العنوان إن وجد
       let insertedAddress = null;
       if (address && typeof address === 'object') {
         const area = address.area ? String(address.area).trim() : null;
@@ -109,9 +102,6 @@ function createCustomerService(pool) {
     }
   }
 
-  /**
-   * Fast search customers by normalized name, customer code, or phone number with pagination.
-   */
   async function searchCustomers({ q, page = 1, limit = 20 }) {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
@@ -144,12 +134,10 @@ function createCustomerService(pool) {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    // Total count query
     const countSql = `SELECT COUNT(*) AS total FROM customers c ${whereClause}`;
     const countRes = await pool.query(countSql, params);
     const total = parseInt(countRes.rows[0]?.total || 0, 10);
 
-    // Data query with JSON aggregations for phones & address
     const dataParams = [...params, limitNum, offset];
     const limitParamIdx = dataParams.length - 1;
     const offsetParamIdx = dataParams.length;

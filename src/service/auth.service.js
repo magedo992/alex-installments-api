@@ -3,10 +3,14 @@ const { createPostgresUsers } = require('../auth/infrastructure/postgres-users')
 const { passwords, createJwtTokens } = require('../auth/infrastructure/credentials');
 
 function composeAuth(pool, jwtSecret) {
+  const users = createPostgresUsers(pool);
   return createAuthUseCases({
-    users: createPostgresUsers(pool),
+    users,
     passwords,
     tokens: createJwtTokens(jwtSecret),
+    branches: {
+      exists: (id) => users.branchExists(id),
+    },
   });
 }
 

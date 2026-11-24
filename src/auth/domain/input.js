@@ -21,7 +21,7 @@ function isDeviceId(value) {
     value.length <= limits.deviceId && !/[\s,\p{Cc}]/u.test(value);
 }
 
-function registrationInput({ username, email, password, deviceId }) {
+function registrationInput({ username, email, password, deviceId, role, branchId, branch_id }) {
   const name = typeof username === 'string' ? username.trim() : '';
   if (!name || name.length > limits.username || /\p{Cc}/u.test(name)) {
     throw new AuthError('INVALID_INPUT', 'اسم المستخدم مطلوب ويجب ألا يتجاوز 100 حرف', 'username');
@@ -31,10 +31,13 @@ function registrationInput({ username, email, password, deviceId }) {
     Buffer.byteLength(password, 'utf8') > limits.passwordBytes || [...password].length < limits.passwordMin) {
     throw new AuthError('INVALID_INPUT', 'كلمة المرور يجب ألا تقل عن 8 أحرف ولا تتجاوز 72 بايت', 'password');
   }
-  if (!isDeviceId(deviceId)) {
+  if (deviceId !== null && !isDeviceId(deviceId)) {
     throw new AuthError('INVALID_INPUT', 'معرف الجهاز (x-device-id) مفقود أو غير صالح', 'x-device-id');
   }
-  return { username: name, email: address, password, deviceId };
+  const validRoles = ['admin', 'employee', 'accountant'];
+  const assignedRole = validRoles.includes(role) ? role : 'employee';
+  const assignedBranchId = branchId ?? branch_id ?? null;
+  return { username: name, email: address, password, deviceId: deviceId || null, role: assignedRole, branchId: assignedBranchId };
 }
 
 function loginInput({ email, password, deviceId }) {

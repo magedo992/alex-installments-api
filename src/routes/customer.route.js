@@ -10,7 +10,6 @@ function createCustomerRoutes(pool, protect) {
 
   router.use(express.json());
 
-  // كلا المسارين محميان بالتوكين وبصمة الجهاز (x-device-id) ومفحوصان بالـ Validation
   router.post('/', protect, validate(createCustomerSchema), controller.create);
   router.get('/', protect, validate(searchCustomerSchema, 'query'), controller.search);
 

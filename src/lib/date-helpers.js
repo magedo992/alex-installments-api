@@ -1,7 +1,3 @@
-/**
- * Returns the first day of the month as 'YYYY-MM-01'
- * Supports string dates ('YYYY-MM-DD') and Date objects.
- */
 function firstOfMonth(d = new Date(), timeZone = 'Africa/Cairo') {
   if (typeof d === 'string') {
     const m = /^(\d{4})-(\d{2})/.exec(d);

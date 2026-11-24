@@ -9,14 +9,10 @@ function toAsciiDigits(s) {
   });
 }
 
-/**
- * Normalizes Arabic text for consistent search & storage.
- * Matches import-helpers.ts normalization rules.
- */
 function normalizeArabic(s) {
   if (typeof s !== 'string') return '';
   return toAsciiDigits(s)
-    .replace(/[\u064B-\u065F\u0670\u0640]/g, '') // tashkeel + tatweel
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
     .replace(/[أإآٱ]/g, 'ا')
     .replace(/ة/g, 'ه')
     .replace(/ى/g, 'ي')

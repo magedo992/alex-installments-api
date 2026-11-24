@@ -4,8 +4,6 @@ function createCustomerController(customerService) {
       const { branch_id, name, phones, address, risk_level, general_note } = req.body || {};
       const userBranch = req.user?.branch_id ?? req.user?.branchId;
 
-      // لو المستخدم مرتبط بفرع (موظف فرع)، نأخذ الفرع تلقائياً من حسابه ونتجاهل أي قيمة مرسلة
-      // لو المستخدم غير مرتبط بفرع (أدمن أو محاسب عام)، يلزم إرسال branch_id في الـ Body
       let effectiveBranchId;
       if (userBranch !== null && userBranch !== undefined) {
         effectiveBranchId = Number(userBranch);
