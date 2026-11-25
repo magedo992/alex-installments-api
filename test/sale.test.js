@@ -76,6 +76,7 @@ test('POST /api/sales creates sale with transaction and applies branch rules', a
   const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
 
   let capturedBranchId = null;
+  let capturedInsertSql = '';
   let insertedGuarantor = false;
   let insertedGPhone = false;
 
@@ -88,6 +89,7 @@ test('POST /api/sales creates sale with transaction and applies branch rules', a
         return { rows: [{ id: 5 }] };
       }
       if (sql.includes('INSERT INTO sales')) {
+        capturedInsertSql = sql;
         capturedBranchId = params[1];
         return {
           rows: [
@@ -169,6 +171,8 @@ test('POST /api/sales creates sale with transaction and applies branch rules', a
     assert.equal(res.status, 201);
     const body = await res.json();
     assert.equal(body.success, true);
+    assert.equal(body.data.id, 50);
+    assert.match(capturedInsertSql, /INSERT INTO sales\s*\(\s*invoice_number,/);
     assert.equal(capturedBranchId, 2);
     assert.equal(body.data.branch_id, 2);
     assert.equal(body.data.total_amount, 17400);
@@ -223,11 +227,12 @@ test('POST /api/sales/:id/payments records payment and updates sale status to co
 
   const fakeClient = {
     async query(sql, params) {
-      if (sql.includes('FROM sales WHERE id = $1 FOR UPDATE')) {
+      if (sql.includes('FROM sales WHERE id = $1') || sql.includes('FROM sales WHERE LOWER(invoice_number)')) {
         return {
           rows: [
             {
               id: 1,
+              invoice_number: 'A116',
               branch_id: 1,
               monthly_installment: 1000,
               installments_count: 5,
@@ -389,8 +394,8 @@ test('POST /api/sales/:id/notes records follow-up note with user id and follow_u
   let capturedNote = null;
   const poolMock = {
     async query(sql, params) {
-      if (sql.includes('FROM sales WHERE id = $1')) {
-        return { rows: [{ id: 10, branch_id: 1 }] };
+      if (sql.includes('FROM sales WHERE id = $1') || sql.includes('FROM sales WHERE LOWER(invoice_number)')) {
+        return { rows: [{ id: 10, invoice_number: 'A116', branch_id: 1 }] };
       }
       if (sql.includes('INSERT INTO sale_notes')) {
         capturedNote = {
@@ -524,11 +529,12 @@ test('Branch scoping strictly blocks cross-branch payments and notes with 403 Fo
 
   const fakeClient = {
     async query(sql) {
-      if (sql.includes('SELECT id, branch_id, monthly_installment')) {
+      if (sql.includes('monthly_installment, installments_count')) {
         return {
           rows: [
             {
               id: 99,
+              invoice_number: 'A999',
               branch_id: 1,
               monthly_installment: 1000,
               installments_count: 10,
@@ -538,11 +544,12 @@ test('Branch scoping strictly blocks cross-branch payments and notes with 403 Fo
           ],
         };
       }
-      if (sql.includes('SELECT id, branch_id FROM sales')) {
+      if (sql.includes('FROM sales WHERE')) {
         return {
           rows: [
             {
               id: 99,
+              invoice_number: 'A999',
               branch_id: 1,
             },
           ],
@@ -594,6 +601,212 @@ test('Branch scoping strictly blocks cross-branch payments and notes with 403 Fo
     const noteBody = await resNote.json();
     assert.equal(noteBody.success, false);
     assert.match(noteBody.message, /غير مصرح لك بتسجيل ملاحظة على فاتورة تخص فرع آخر/);
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/sales searches by invoice_number and POST /api/sales/:id/payments accepts invoice_number', async () => {
+  const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 1 });
+
+  let capturedSearchParams = [];
+  const fakeClient = {
+    async query(sql, params) {
+      if (sql.includes('FROM sales WHERE LOWER(invoice_number)')) {
+        return {
+          rows: [
+            {
+              id: 1,
+              invoice_number: 'A116',
+              branch_id: 1,
+              monthly_installment: 1000,
+              installments_count: 5,
+              discount_amount: 0,
+              status: 'active',
+            },
+          ],
+        };
+      }
+      if (sql.includes('INSERT INTO payments')) {
+        return {
+          rows: [
+            {
+              id: 200,
+              sale_id: params[0],
+              amount: params[1],
+              payment_month: params[2],
+              payment_date: params[3],
+              notes: params[4],
+              created_at: new Date().toISOString(),
+            },
+          ],
+        };
+      }
+      if (sql.includes('SELECT COALESCE(SUM(amount), 0) AS total_paid')) {
+        return { rows: [{ total_paid: 1000 }] };
+      }
+      return { rows: [] };
+    },
+    release() {},
+  };
+
+  const poolMock = {
+    async connect() {
+      return fakeClient;
+    },
+    async query(sql, params) {
+      capturedSearchParams = params;
+      if (sql.includes('COUNT(*)')) {
+        return { rows: [{ total: 1 }] };
+      }
+      return {
+        rows: [
+          {
+            sale_id: 1,
+            invoice_number: 'A116',
+            branch_id: 1,
+            customer_id: 10,
+            customer_name: 'أحمد علي',
+            remaining_amount: 4000,
+            status: 'active',
+          },
+        ],
+      };
+    },
+  };
+
+  const app = createTestApp(poolMock, auth);
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    const searchRes = await fetch(`http://127.0.0.1:${port}/api/sales?invoice_number=A116`, {
+      headers: {
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+    });
+    assert.equal(searchRes.status, 200);
+    const searchBody = await searchRes.json();
+    assert.equal(searchBody.success, true);
+    assert.equal(searchBody.data[0].invoice_number, 'A116');
+    assert.equal(capturedSearchParams[1], 'A116');
+
+    const payRes = await fetch(`http://127.0.0.1:${port}/api/sales/A116/payments`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+      body: JSON.stringify({ amount: 1000, payment_date: '2026-11-25' }),
+    });
+    assert.equal(payRes.status, 201);
+    const payBody = await payRes.json();
+    assert.equal(payBody.success, true);
+    assert.equal(payBody.data.summary.sale_id, 1);
+    assert.equal(payBody.data.summary.invoice_number, 'A116');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/sales ignores any client id and requires invoice_number', async () => {
+  const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 1 });
+
+  let capturedInsertSql = '';
+  let capturedInsertParams = [];
+
+  const fakeClient = {
+    async query(sql, params) {
+      if (sql.includes('SELECT id FROM customers')) {
+        return { rows: [{ id: 10 }] };
+      }
+      if (sql.includes('SELECT id FROM customer_addresses')) {
+        return { rows: [{ id: 5 }] };
+      }
+      if (sql.includes('INSERT INTO sales')) {
+        capturedInsertSql = sql;
+        capturedInsertParams = params;
+        return {
+          rows: [
+            {
+              id: 77,
+              invoice_number: params[0],
+              branch_id: params[1],
+              customer_id: params[2],
+              address_id: params[3],
+              item_details: params[4],
+              cash_price: params[5],
+              down_payment: params[6],
+              monthly_installment: params[7],
+              installments_count: params[8],
+              discount_amount: params[9],
+              total_amount: params[10],
+              delivery_date: params[11],
+              first_installment_date: params[12],
+              due_day: params[13],
+              collection_type: params[14],
+              status: params[15],
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    },
+    release() {},
+  };
+
+  const poolMock = {
+    async connect() {
+      return fakeClient;
+    },
+  };
+
+  const app = createTestApp(poolMock, auth);
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    const missingRes = await fetch(`http://127.0.0.1:${port}/api/sales`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+      body: JSON.stringify({
+        customer_id: 10,
+        monthly_installment: 1000,
+        installments_count: 6,
+        first_installment_date: '2026-12-01',
+      }),
+    });
+    assert.equal(missingRes.status, 400);
+
+    const createRes = await fetch(`http://127.0.0.1:${port}/api/sales`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+      body: JSON.stringify({
+        id: 9999,
+        invoice_number: 'INV-USER-77',
+        customer_id: 10,
+        monthly_installment: 1000,
+        installments_count: 6,
+        first_installment_date: '2026-12-01',
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const createBody = await createRes.json();
+    assert.equal(createBody.success, true);
+    assert.equal(createBody.data.id, 77);
+    assert.equal(createBody.data.invoice_number, 'INV-USER-77');
+    assert.equal(capturedInsertParams[0], 'INV-USER-77');
+    assert.match(capturedInsertSql, /INSERT INTO sales\s*\(\s*invoice_number,/);
   } finally {
     server.close();
   }

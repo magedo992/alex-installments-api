@@ -36,6 +36,20 @@ function fixture(initialUsers = [], initialBranches = [1, 2]) {
       }
       return undefined;
     },
+    async findByUsername(username) {
+      for (const u of usersMap.values()) {
+        if (u.username === username) return { ...u };
+      }
+      return undefined;
+    },
+    async findByUsernameOrEmail(loginId) {
+      for (const u of usersMap.values()) {
+        if (u.username === loginId || (u.email && u.email.toLowerCase() === loginId.toLowerCase())) {
+          return { ...u };
+        }
+      }
+      return undefined;
+    },
     async replaceToken(userId, previousToken, token, deviceId) {
       const u = usersMap.get(userId);
       if (!u || u.token !== previousToken || (u.deviceId && u.deviceId !== deviceId)) return false;
@@ -462,7 +476,7 @@ test('registration device-binding: newly registered employee can log in from DIF
       'Content-Type': 'application/json',
       'x-device-id': 'employee-pos-01',
     },
-    body: JSON.stringify({ email: newEmployeeData.email, password: newEmployeeData.password }),
+    body: JSON.stringify({ username: newEmployeeData.username, password: newEmployeeData.password }),
   });
   assert.equal(firstLoginRes.status, 200);
   const { token: empToken } = await firstLoginRes.json();
@@ -473,7 +487,7 @@ test('registration device-binding: newly registered employee can log in from DIF
       'Content-Type': 'application/json',
       'x-device-id': 'employee-phone-02',
     },
-    body: JSON.stringify({ email: newEmployeeData.email, password: newEmployeeData.password }),
+    body: JSON.stringify({ username: newEmployeeData.username, password: newEmployeeData.password }),
   });
   assert.equal(secondLoginRes.status, 403);
 
@@ -484,6 +498,87 @@ test('registration device-binding: newly registered employee can log in from DIF
     },
   });
   assert.equal(profileRes.status, 200);
+
+  // Also verify login works with email on the same bound device
+  const emailLoginRes = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-device-id': 'employee-pos-01',
+    },
+    body: JSON.stringify({ email: newEmployeeData.email, password: newEmployeeData.password }),
+  });
+  assert.equal(emailLoginRes.status, 200);
+});
+
+test('admin login without x-device-id and assigning device_id when creating user', async (t) => {
+  const adminId = 'a0000000-0000-4000-8000-000000000088';
+  const adminUser = {
+    id: adminId,
+    username: 'NoDeviceAdmin',
+    email: 'nodevice@example.com',
+    passwordHash: 'hash:AdminPass123',
+    role: 'admin',
+    deviceId: null,
+    token: null,
+  };
+  const { auth } = fixture([adminUser]);
+
+  const app = express();
+  app.use('/api/auth', createAuthRoutes(auth));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(() => new Promise((resolve, reject) => server.close((e) => e ? reject(e) : resolve())));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  // Admin logs in WITHOUT x-device-id header using email
+  const adminLoginRes = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'nodevice@example.com', password: 'AdminPass123' }),
+  });
+  assert.equal(adminLoginRes.status, 200);
+  const { token: adminToken } = await adminLoginRes.json();
+
+  // Admin creates an employee WITH a pre-assigned device_id and WITHOUT sending x-device-id
+  const regRes = await fetch(`${base}/api/auth/register`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${adminToken}`,
+    },
+    body: JSON.stringify({
+      username: 'BoundEmployee',
+      email: 'bound@example.com',
+      password: 'Password123!',
+      role: 'employee',
+      branch_id: 1,
+      device_id: 'branch1-pos-99',
+    }),
+  });
+  assert.equal(regRes.status, 201);
+
+  // Employee cannot log in from a different device
+  const wrongDevRes = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-device-id': 'other-device-01',
+    },
+    body: JSON.stringify({ username: 'BoundEmployee', password: 'Password123!' }),
+  });
+  assert.equal(wrongDevRes.status, 403);
+
+  // Employee logs in from the assigned device
+  const rightDevRes = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-device-id': 'branch1-pos-99',
+    },
+    body: JSON.stringify({ username: 'BoundEmployee', password: 'Password123!' }),
+  });
+  assert.equal(rightDevRes.status, 200);
 });
 
 test('protect middleware: re-reads user from DB on every request and rejects 401 if user deleted', async (t) => {

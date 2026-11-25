@@ -14,6 +14,8 @@ function createAuthRoutes(auth, authLimiter, protectMiddleware, restrictToMiddle
 
   router.post('/register', limiter, protect, restrictTo('admin'), validate(registerUserSchema), controller.register);
   router.post('/login', limiter, controller.login);
+  router.get('/users', protect, restrictTo('admin'), controller.listUsers);
+  router.get('/branches', protect, restrictTo('admin'), controller.listBranches);
   router.use((error, req, res, next) => {
     if (error.type === 'entity.parse.failed') {
       return res.status(400).json({ message: 'صيغة JSON غير صالحة' });

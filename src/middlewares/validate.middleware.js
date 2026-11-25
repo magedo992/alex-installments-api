@@ -67,6 +67,13 @@ const registerUserSchema = z.object({
     invalid_type_error: 'الدور يجب أن يكون admin أو employee أو accountant',
   }).optional().default('employee'),
   branch_id: z.number({ invalid_type_error: 'معرف الفرع يجب أن يكون رقماً' }).int().positive('معرف الفرع يجب أن يكون رقماً موجباً').optional().nullable(),
+  device_id: z.string()
+    .trim()
+    .min(1, 'بصمة الجهاز غير صالحة')
+    .max(256, 'بصمة الجهاز يجب ألا تتجاوز 256 حرفاً')
+    .refine((val) => !/[\s,\p{Cc}]/u.test(val), 'بصمة الجهاز يجب ألا تحتوي على مسافات أو فواصل')
+    .optional()
+    .nullable(),
 }).strict()
 .refine(
   (data) => {
@@ -132,6 +139,14 @@ const overdueSalesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+const searchSalesSchema = z.object({
+  invoice_number: z.string().max(50).trim().optional(),
+  q: z.string().max(100).trim().optional(),
+  branch_id: z.coerce.number().int().positive().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 const addNoteSchema = z.object({
   content: z.string({ required_error: 'محتوى الملاحظة إلزامي' }).min(1, 'محتوى الملاحظة إلزامي').max(2000, 'محتوى الملاحظة طويل جداً').trim(),
   note_type: z.enum(['call', 'visit', 'inquiry', 'legal', 'general', 'legacy_import'], {
@@ -146,6 +161,7 @@ module.exports = {
   createCustomerSchema,
   searchCustomerSchema,
   createSaleSchema,
+  searchSalesSchema,
   recordPaymentSchema,
   overdueSalesSchema,
   addNoteSchema,

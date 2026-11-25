@@ -21,11 +21,16 @@ function isDeviceId(value) {
     value.length <= limits.deviceId && !/[\s,\p{Cc}]/u.test(value);
 }
 
-function registrationInput({ username, email, password, deviceId, role, branchId, branch_id }) {
-  const name = typeof username === 'string' ? username.trim() : '';
+function validUsername(value) {
+  const name = typeof value === 'string' ? value.trim() : '';
   if (!name || name.length > limits.username || /\p{Cc}/u.test(name)) {
     throw new AuthError('INVALID_INPUT', 'اسم المستخدم مطلوب ويجب ألا يتجاوز 100 حرف', 'username');
   }
+  return name;
+}
+
+function registrationInput({ username, email, password, deviceId, role, branchId, branch_id }) {
+  const name = validUsername(username);
   const address = emailAddress(email);
   if (typeof password !== 'string' || !password.trim() ||
     Buffer.byteLength(password, 'utf8') > limits.passwordBytes || [...password].length < limits.passwordMin) {
@@ -40,15 +45,19 @@ function registrationInput({ username, email, password, deviceId, role, branchId
   return { username: name, email: address, password, deviceId: deviceId || null, role: assignedRole, branchId: assignedBranchId };
 }
 
-function loginInput({ email, password, deviceId }) {
-  const address = emailAddress(email);
+function loginInput({ username, email, identifier, password, deviceId }) {
+  const rawLogin = identifier ?? username ?? email;
+  const loginId = typeof rawLogin === 'string' ? rawLogin.trim() : '';
+  if (!loginId || loginId.length > limits.email || /\p{Cc}/u.test(loginId)) {
+    throw new AuthError('INVALID_INPUT', 'اسم المستخدم أو البريد الإلكتروني مطلوب', 'username');
+  }
   if (typeof password !== 'string' || !password.length) {
     throw new AuthError('INVALID_INPUT', 'كلمة المرور مطلوبة', 'password');
   }
-  if (!isDeviceId(deviceId)) {
-    throw new AuthError('INVALID_INPUT', 'معرف الجهاز (x-device-id) مفقود أو غير صالح', 'x-device-id');
+  if (deviceId !== undefined && deviceId !== null && !isDeviceId(deviceId)) {
+    throw new AuthError('INVALID_INPUT', 'معرف الجهاز (x-device-id) غير صالح', 'x-device-id');
   }
-  return { email: address, password, deviceId };
+  return { loginId, username: loginId, password, deviceId: deviceId ?? null };
 }
 
 module.exports = { AuthError, limits, registrationInput, loginInput, isDeviceId };

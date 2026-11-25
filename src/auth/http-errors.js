@@ -3,6 +3,7 @@ const { AuthError } = require('./domain/input');
 const statusByCode = {
   INVALID_INPUT: 400,
   DUPLICATE_EMAIL: 400,
+  DUPLICATE_USERNAME: 400,
   INVALID_CREDENTIALS: 401,
   UNAUTHENTICATED: 401,
   DEVICE_MISMATCH: 403,

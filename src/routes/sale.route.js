@@ -4,6 +4,7 @@ const { createSaleController } = require('../controller/sale.controller');
 const {
   validate,
   createSaleSchema,
+  searchSalesSchema,
   recordPaymentSchema,
   overdueSalesSchema,
   addNoteSchema,
@@ -16,6 +17,7 @@ function createSaleRoutes(pool, protect) {
 
   router.use(express.json());
 
+  router.get('/', protect, validate(searchSalesSchema, 'query'), controller.search);
   router.post('/', protect, validate(createSaleSchema), controller.create);
   router.post('/:id/payments', protect, validate(recordPaymentSchema), controller.recordPayment);
   router.get('/overdue', protect, validate(overdueSalesSchema, 'query'), controller.getOverdue);

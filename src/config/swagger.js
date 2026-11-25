@@ -43,15 +43,11 @@ const swaggerDocument = {
     '/api/auth/register': {
       post: {
         tags: ['Authentication'],
-        summary: 'تسجيل مستخدم جديد',
-        description: 'إنشاء حساب جديد وتشفير كلمة المرور وربط الحساب بمعرف الجهاز المرسل في x-device-id من أول تسجيل. معرف الجهاز قيمة يرسلها العميل وليس إثباتاً لهوية الجهاز.',
-        parameters: [
+        summary: 'تسجيل مستخدم جديد (خاص بالأدمن فقط)',
+        description: 'إنشاء حساب جديد بواسطة الأدمن وتشفير كلمة المرور وتحديد الدور (role) والفرع (branch_id). يمكن للأدمن تحديد بصمة الجهاز (device_id) للمستخدم مباشرة عند الإنشاء، أو تركها فارغة ليتم ربطها عند أول تسجيل دخول للموظف. الأدمن لا يحتاج لإرسال x-device-id.',
+        security: [
           {
-            name: 'x-device-id',
-            in: 'header',
-            required: true,
-            description: 'معرف ثابت يولده العميل مرة واحدة ويحتفظ به ويرسله أيضاً عند تسجيل الدخول. بدون مسافات أو فواصل.',
-            schema: { type: 'string', minLength: 1, maxLength: limits.deviceId, example: 'device-unique-fingerprint-123' },
+            bearerAuth: [],
           },
         ],
         requestBody: {
@@ -81,6 +77,26 @@ const swaggerDocument = {
                     description: 'الحد الأقصى 72 بايت بترميز UTF-8',
                     example: 'Secret1234',
                   },
+                  role: {
+                    type: 'string',
+                    enum: ['admin', 'employee', 'accountant'],
+                    default: 'employee',
+                    description: 'دور المستخدم في النظام',
+                    example: 'employee',
+                  },
+                  branch_id: {
+                    type: 'integer',
+                    nullable: true,
+                    description: 'معرف الفرع (إلزامي إذا كان الدور employee، واختياري/null لـ accountant أو admin)',
+                    example: 1,
+                  },
+                  device_id: {
+                    type: 'string',
+                    nullable: true,
+                    maxLength: limits.deviceId,
+                    description: 'بصمة الجهاز المخصصة للمستخدم (بدون مسافات أو فواصل؛ اختياري)',
+                    example: 'branch1-pos-01',
+                  },
                 },
               },
             },
@@ -105,6 +121,7 @@ const swaggerDocument = {
                         username: { type: 'string', example: 'ahmed_dev' },
                         email: { type: 'string', example: 'ahmed@example.com' },
                         role: { type: 'string', example: 'employee' },
+                        branch_id: { type: 'integer', nullable: true, example: 1 },
                       },
                     },
                   },
@@ -113,7 +130,7 @@ const swaggerDocument = {
             },
           },
           400: {
-            description: 'بيانات غير مكتملة أو مدخلات غير صحيحة',
+            description: 'بيانات غير مكتملة أو مدخلات غير صحيحة أو اسم المستخدم/البريد مسجل مسبقاً',
             content: {
               'application/json': {
                 schema: {
@@ -129,6 +146,12 @@ const swaggerDocument = {
               },
             },
           },
+          401: {
+            description: 'غير مصرح بالدخول',
+          },
+          403: {
+            description: 'ليس لديك صلاحية تنفيذ هذا الإجراء (يتطلب دور admin)',
+          },
           500: {
             description: 'خطأ في الخادم',
           },
@@ -139,13 +162,13 @@ const swaggerDocument = {
       post: {
         tags: ['Authentication'],
         summary: 'تسجيل الدخول',
-        description: 'تسجيل الدخول والتحقق من بصمة الجهاز وتوليد توكين JWT.',
+        description: 'تسجيل الدخول باستخدام اسم المستخدم (username) أو البريد الإلكتروني (email) وكلمة المرور وتوليد توكين JWT. الأدمن يدخل بدون بصمة جهاز (x-device-id)، بينما الموظف والمحاسب يشترط لهما إرسال بصمة الجهاز في الهيدر x-device-id.',
         parameters: [
           {
             name: 'x-device-id',
             in: 'header',
-            required: true,
-            description: 'بصمة أو معرف الجهاز الفريد للتحقق من عدم استخدام الحساب من جهاز آخر',
+            required: false,
+            description: 'بصمة أو معرف الجهاز الفريد (إلزامي للموظف والمحاسب، وغير مطلوب للأدمن)',
             schema: {
               type: 'string',
               minLength: 1,
@@ -161,12 +184,19 @@ const swaggerDocument = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['email', 'password'],
+                required: ['password'],
                 properties: {
+                  username: {
+                    type: 'string',
+                    maxLength: limits.email,
+                    description: 'اسم المستخدم أو البريد الإلكتروني (يمكن أيضاً إرسال الحقل باسم email أو identifier)',
+                    example: 'ahmed_dev',
+                  },
                   email: {
                     type: 'string',
                     format: 'email',
                     maxLength: limits.email,
+                    description: 'اختياري كبديل عن username',
                     example: 'ahmed@example.com',
                   },
                   password: {
@@ -267,15 +297,60 @@ const swaggerDocument = {
         },
       },
     },
+    '/api/auth/users': {
+      get: {
+        tags: ['Admin'],
+        summary: 'عرض قائمة المستخدمين (خاص بالأدمن فقط)',
+        description: 'استرجاع جميع المستخدمين المسجلين في النظام مع الصلاحيات وأرقام الفروع وبصمة الجهاز.',
+        security: [
+          {
+            bearerAuth: [],
+          },
+        ],
+        responses: {
+          200: {
+            description: 'قائمة المستخدمين بنجاح',
+          },
+          401: {
+            description: 'غير مصرح بالدخول',
+          },
+          403: {
+            description: 'ليس لديك صلاحية تنفيذ هذا الإجراء (المستخدم ليس أدمن)',
+          },
+        },
+      },
+    },
+    '/api/auth/branches': {
+      get: {
+        tags: ['Admin'],
+        summary: 'عرض قائمة الفروع (خاص بالأدمن فقط)',
+        description: 'استرجاع قائمة الفروع المتاحة لربط موظفي الفروع بها عند إنشاء حساب جديد.',
+        security: [
+          {
+            bearerAuth: [],
+          },
+        ],
+        responses: {
+          200: {
+            description: 'قائمة الفروع بنجاح',
+          },
+          401: {
+            description: 'غير مصرح بالدخول',
+          },
+          403: {
+            description: 'ليس لديك صلاحية تنفيذ هذا الإجراء (المستخدم ليس أدمن)',
+          },
+        },
+      },
+    },
     '/api/admin-only': {
       get: {
         tags: ['Admin'],
         summary: 'لوحة الأدمن (خاصة بالمسؤولين فقط)',
-        description: 'نقطة محمية مقتصرة حصرياً على المستخدمين أصحاب الدور `admin`.',
+        description: 'نقطة محمية مقتصرة حصرياً على المستخدمين أصحاب الدور `admin` (لا تشترط بصمة جهاز).',
         security: [
           {
             bearerAuth: [],
-            deviceIdAuth: [],
           },
         ],
         responses: {
@@ -489,10 +564,10 @@ const swaggerDocument = {
       },
     },
     '/api/sales': {
-      post: {
+      get: {
         tags: ['Sales'],
-        summary: 'إنشاء فاتورة بيع بالتقسيط جديدة مع الضامن',
-        description: 'يقوم بإنشاء سجل فاتورة جديدة في Transaction ذرية: يحدد الفرع تلقائياً بناءً على المستخدم (إذا كان موظف فرع يؤخذ فرعه تلقائياً، وإذا كان أدمن يلزم إرساله في الـ Body)، يحسب إجمالي الفاتورة، ويسجل الضامن وأرقامه إن وُجدوا. يتطلب توكين صالح وبصمة جهاز مطابقة.',
+        summary: 'البحث عن الفواتير برقم الفاتورة (invoice_number) أو اسم/كود العميل',
+        description: 'يُستخدم للبحث عن الفاتورة برقم الفاتورة (invoice_number) الذي أدخله الموظف يدوياً (مثل A116) أو باسم العميل/هاتفه لعرض الرصيد المتبقي قبل تسجيل دفع القسط.',
         security: [
           {
             bearerAuth: [],
@@ -503,8 +578,66 @@ const swaggerDocument = {
           {
             name: 'x-device-id',
             in: 'header',
-            required: true,
-            description: 'بصمة الجهاز المقترنة بجلسة تسجيل الدخول',
+            required: false,
+            description: 'بصمة الجهاز (إلزامية للموظف والمحاسب، وغير مطلوبة للأدمن)',
+            schema: { type: 'string', example: 'device-unique-fingerprint-123' },
+          },
+          {
+            name: 'invoice_number',
+            in: 'query',
+            required: false,
+            description: 'رقم الفاتورة اليدوي للبحث المطابق (مثل A116)',
+            schema: { type: 'string', example: 'A116' },
+          },
+          {
+            name: 'q',
+            in: 'query',
+            required: false,
+            description: 'بحث عام (رقم الفاتورة، اسم العميل، كود العميل، أو رقم الهاتف)',
+            schema: { type: 'string', example: 'A116' },
+          },
+          {
+            name: 'branch_id',
+            in: 'query',
+            required: false,
+            description: 'معرف الفرع (للأدمن والمحاسب فقط؛ موظف الفرع يُحدد فرعه تلقائياً)',
+            schema: { type: 'integer', example: 1 },
+          },
+          {
+            name: 'page',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', default: 1, example: 1 },
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', default: 20, example: 20 },
+          },
+        ],
+        responses: {
+          200: { description: 'قائمة الفواتير المطابقة مع الأرصدة' },
+          401: { description: 'غير مصرح بالدخول' },
+          403: { description: 'الجهاز غير مطابق للتوكين' },
+        },
+      },
+      post: {
+        tags: ['Sales'],
+        summary: 'إنشاء فاتورة بيع بالتقسيط جديدة مع الضامن',
+        description: 'يقوم بإنشاء سجل فاتورة جديدة في Transaction ذرية: **معرف الفاتورة (id) يتولد تلقائياً (serial) من قاعدة البيانات، بينما رقم الفاتورة (invoice_number مثل A116) يُدخله الموظف يدوياً (Manual)** وهو ما يُستخدم لاحقاً للبحث ودفع الأقساط. يحدد الفرع تلقائياً بناءً على المستخدم (إذا كان موظف فرع يؤخذ فرعه تلقائياً، وإذا كان أدمن يلزم إرساله في الـ Body)، يحسب إجمالي الفاتورة، ويسجل الضامن وأرقامه إن وُجدوا.',
+        security: [
+          {
+            bearerAuth: [],
+            deviceIdAuth: [],
+          },
+        ],
+        parameters: [
+          {
+            name: 'x-device-id',
+            in: 'header',
+            required: false,
+            description: 'بصمة الجهاز المقترنة بجلسة تسجيل الدخول (إلزامي للموظف والمحاسب، وغير مطلوب للأدمن)',
             schema: {
               type: 'string',
               example: 'device-unique-fingerprint-123',
@@ -521,8 +654,8 @@ const swaggerDocument = {
                 properties: {
                   invoice_number: {
                     type: 'string',
-                    description: 'رقم الفاتورة الفريد',
-                    example: 'INV-2026-001',
+                    description: 'رقم الفاتورة الفريد (يُدخله الموظف يدوياً مثل A116)',
+                    example: 'A116',
                   },
                   branch_id: {
                     type: 'integer',
@@ -633,7 +766,7 @@ const swaggerDocument = {
             description: 'تم إنشاء الفاتورة بنجاح',
           },
           400: {
-            description: 'بيانات غير صالحة أو رقم الفاتورة مسجل مسبقاً',
+            description: 'بيانات غير صالحة أو رقم الفاتورة (invoice_number) مسجل مسبقاً',
           },
           401: {
             description: 'غير مصرح بالدخول',
@@ -673,10 +806,10 @@ const swaggerDocument = {
             name: 'id',
             in: 'path',
             required: true,
-            description: 'معرف الفاتورة المسجلة في جدول sales',
+            description: 'رقم الفاتورة (invoice_number مثل A116) أو معرف الفاتورة الداخلي (sales.id)',
             schema: {
-              type: 'integer',
-              example: 1,
+              type: 'string',
+              example: 'A116',
             },
           },
         ],
@@ -835,10 +968,10 @@ const swaggerDocument = {
             name: 'id',
             in: 'path',
             required: true,
-            description: 'معرف الفاتورة المسجلة في sales',
+            description: 'رقم الفاتورة (invoice_number مثل A116) أو معرف الفاتورة الداخلي (sales.id)',
             schema: {
-              type: 'integer',
-              example: 1,
+              type: 'string',
+              example: 'A116',
             },
           },
         ],

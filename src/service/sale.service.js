@@ -181,9 +181,35 @@ function createSaleService(pool) {
     }
   }
 
+  async function findSaleByIdentifier(queryable, saleId, { forUpdate = false } = {}) {
+    const rawIdentifier = toAsciiDigits(String(saleId ?? '')).trim();
+    if (!rawIdentifier || /^-?\d+$/.test(rawIdentifier) && Number(rawIdentifier) <= 0) {
+      throw new Error('معرف الفاتورة (saleId) غير صالح');
+    }
+
+    const lockClause = forUpdate ? ' FOR UPDATE' : '';
+    const columns = forUpdate
+      ? 'id, invoice_number, branch_id, monthly_installment, installments_count, discount_amount, status'
+      : 'id, invoice_number, branch_id';
+
+    if (/^\d+$/.test(rawIdentifier)) {
+      const res = await queryable.query(
+        `SELECT ${columns} FROM sales WHERE id = $1 OR LOWER(invoice_number) = LOWER($2) LIMIT 1${lockClause}`,
+        [Number(rawIdentifier), rawIdentifier]
+      );
+      return res.rows[0] || null;
+    }
+
+    const res = await queryable.query(
+      `SELECT ${columns} FROM sales WHERE LOWER(invoice_number) = LOWER($1) LIMIT 1${lockClause}`,
+      [rawIdentifier]
+    );
+    return res.rows[0] || null;
+  }
+
   async function recordPayment({ user, saleId, amount, paymentDate, notes = null }) {
-    const saleIdNum = Number(saleId);
-    if (!saleIdNum || isNaN(saleIdNum) || saleIdNum <= 0) {
+    const rawIdentifier = toAsciiDigits(String(saleId ?? '')).trim();
+    if (!rawIdentifier || (/^-?\d+$/.test(rawIdentifier) && Number(rawIdentifier) <= 0)) {
       throw new Error('معرف الفاتورة (saleId) غير صالح');
     }
 
@@ -199,17 +225,12 @@ function createSaleService(pool) {
     try {
       await client.query('BEGIN');
 
-      const saleCheck = await client.query(
-        'SELECT id, branch_id, monthly_installment, installments_count, discount_amount, status FROM sales WHERE id = $1 FOR UPDATE',
-        [saleIdNum]
-      );
-
-      if (saleCheck.rows.length === 0) {
+      const sale = await findSaleByIdentifier(client, rawIdentifier, { forUpdate: true });
+      if (!sale) {
         throw new Error('الفاتورة المحددة غير موجودة');
       }
 
-      const sale = saleCheck.rows[0];
-
+      const actualSaleId = Number(sale.id);
       const userBranch = user?.branch_id ?? user?.branchId;
       if (userBranch !== null && userBranch !== undefined && Number(sale.branch_id) !== Number(userBranch)) {
         const forbiddenErr = new Error('غير مصرح لك بتسجيل دفعة على فاتورة تخص فرع آخر');
@@ -226,13 +247,13 @@ function createSaleService(pool) {
         `INSERT INTO payments (sale_id, amount, payment_month, payment_date, notes, created_at)
          VALUES ($1, $2, $3, $4, $5, NOW())
          RETURNING id, sale_id, amount, payment_month, payment_date, notes, created_at`,
-        [saleIdNum, amountNum, paymentMonth, effectiveDate, notes ? String(notes).trim() : null]
+        [actualSaleId, amountNum, paymentMonth, effectiveDate, notes ? String(notes).trim() : null]
       );
       const payment = payRes.rows[0];
 
       const totalRes = await client.query(
         'SELECT COALESCE(SUM(amount), 0) AS total_paid FROM payments WHERE sale_id = $1',
-        [saleIdNum]
+        [actualSaleId]
       );
       const totalPaid = Number(totalRes.rows[0].total_paid);
       const remainingBalance = Math.max(0, requiredInstallmentsTotal - totalPaid);
@@ -241,7 +262,7 @@ function createSaleService(pool) {
       if (totalPaid >= requiredInstallmentsTotal && requiredInstallmentsTotal > 0 && currentStatus !== 'completed') {
         const updateRes = await client.query(
           `UPDATE sales SET status = 'completed', updated_at = NOW() WHERE id = $1 RETURNING status`,
-          [saleIdNum]
+          [actualSaleId]
         );
         currentStatus = updateRes.rows[0].status;
       }
@@ -251,7 +272,8 @@ function createSaleService(pool) {
       return {
         payment,
         summary: {
-          sale_id: saleIdNum,
+          sale_id: actualSaleId,
+          invoice_number: sale.invoice_number,
           required_installments_total: requiredInstallmentsTotal,
           total_paid: totalPaid,
           remaining_balance: remainingBalance,
@@ -369,8 +391,8 @@ function createSaleService(pool) {
   }
 
   async function addSaleNote({ user, saleId, noteData }) {
-    const saleIdNum = Number(saleId);
-    if (!saleIdNum || isNaN(saleIdNum) || saleIdNum <= 0) {
+    const rawIdentifier = toAsciiDigits(String(saleId ?? '')).trim();
+    if (!rawIdentifier || (/^-?\d+$/.test(rawIdentifier) && Number(rawIdentifier) <= 0)) {
       throw new Error('معرف الفاتورة (saleId) غير صالح');
     }
 
@@ -384,12 +406,12 @@ function createSaleService(pool) {
     const allowedTypes = ['call', 'visit', 'inquiry', 'legal', 'general', 'legacy_import'];
     const effectiveNoteType = allowedTypes.includes(note_type) ? note_type : 'call';
 
-    const saleCheck = await pool.query('SELECT id, branch_id FROM sales WHERE id = $1', [saleIdNum]);
-    if (saleCheck.rows.length === 0) {
+    const sale = await findSaleByIdentifier(pool, rawIdentifier);
+    if (!sale) {
       throw new Error('الفاتورة المحددة غير موجودة');
     }
 
-    const sale = saleCheck.rows[0];
+    const actualSaleId = Number(sale.id);
     const userBranch = user?.branch_id ?? user?.branchId;
     if (userBranch !== null && userBranch !== undefined && Number(sale.branch_id) !== Number(userBranch)) {
       const forbiddenErr = new Error('غير مصرح لك بتسجيل ملاحظة على فاتورة تخص فرع آخر');
@@ -404,7 +426,7 @@ function createSaleService(pool) {
     `;
 
     const res = await pool.query(insertSql, [
-      saleIdNum,
+      actualSaleId,
       user?.id || null,
       effectiveNoteType,
       trimmedContent,
@@ -414,8 +436,107 @@ function createSaleService(pool) {
     return res.rows[0];
   }
 
+  async function searchSales({ user, query = {} }) {
+    const { invoice_number, q, branch_id, page = 1, limit = 20 } = query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    let effectiveBranchId = null;
+    const userBranch = user?.branch_id ?? user?.branchId;
+    if (userBranch !== null && userBranch !== undefined) {
+      effectiveBranchId = Number(userBranch);
+    } else if (branch_id) {
+      effectiveBranchId = Number(branch_id);
+    }
+
+    const conditions = [];
+    const params = [];
+
+    if (effectiveBranchId) {
+      params.push(effectiveBranchId);
+      conditions.push(`sb.branch_id = $${params.length}`);
+    }
+
+    if (invoice_number && String(invoice_number).trim()) {
+      params.push(toAsciiDigits(String(invoice_number)).trim());
+      conditions.push(`LOWER(sb.invoice_number) = LOWER($${params.length})`);
+    } else if (q && String(q).trim()) {
+      const cleanQ = toAsciiDigits(String(q)).trim();
+      params.push(`%${cleanQ}%`);
+      const likeIdx = params.length;
+      params.push(cleanQ);
+      const exactIdx = params.length;
+      conditions.push(`(
+        sb.invoice_number ILIKE $${likeIdx}
+        OR c.name ILIKE $${likeIdx}
+        OR c.normalized_name ILIKE $${likeIdx}
+        OR c.customer_code = $${exactIdx}
+        OR EXISTS (SELECT 1 FROM phone_numbers pn WHERE pn.customer_id = sb.customer_id AND pn.phone ILIKE $${likeIdx})
+      )`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const countSql = `SELECT COUNT(*) AS total FROM sale_balances sb JOIN customers c ON c.id = sb.customer_id ${whereClause}`;
+    const countRes = await pool.query(countSql, params);
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+    const dataParams = [...params, limitNum, offset];
+    const limitParamIdx = dataParams.length - 1;
+    const offsetParamIdx = dataParams.length;
+
+    const dataSql = `
+      SELECT
+        sb.sale_id,
+        sb.invoice_number,
+        sb.branch_id,
+        b.name AS branch_name,
+        sb.customer_id,
+        c.customer_code,
+        c.name AS customer_name,
+        (
+          SELECT pn.phone
+          FROM phone_numbers pn
+          WHERE pn.customer_id = sb.customer_id
+          ORDER BY pn.is_primary DESC, pn.id ASC
+          LIMIT 1
+        ) AS primary_phone,
+        sb.item_details,
+        sb.monthly_installment,
+        sb.installments_count,
+        sb.first_installment_date,
+        sb.due_day,
+        sb.total_paid,
+        sb.required_installments_total,
+        sb.remaining_amount,
+        sb.due_installments,
+        sb.due_amount,
+        sb.overdue_amount,
+        sb.status
+      FROM sale_balances sb
+      JOIN customers c ON c.id = sb.customer_id
+      LEFT JOIN branches b ON b.id = sb.branch_id
+      ${whereClause}
+      ORDER BY sb.sale_id DESC
+      LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
+    `;
+
+    const dataRes = await pool.query(dataSql, dataParams);
+
+    return {
+      data: dataRes.rows,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 1,
+      },
+    };
+  }
+
   return {
     createSale,
+    searchSales,
     recordPayment,
     getOverdueSales,
     addSaleNote,

@@ -21,31 +21,37 @@ function createAuthUseCases({ users, passwords, tokens, branches }) {
   }
 
   async function login(input) {
-    const { email, password, deviceId } = loginInput(input);
-    const user = await users.findByEmail(email);
+    const { loginId, password, deviceId } = loginInput(input);
+    const user = users.findByUsernameOrEmail
+      ? await users.findByUsernameOrEmail(loginId)
+      : await users.findByUsername(loginId);
     if (!user || !(await passwords.matches(password, user.passwordHash))) {
       throw new AuthError('INVALID_CREDENTIALS', 'بيانات الدخول غير صحيحة');
     }
-    const previousDevice = user.deviceId || (user.token && tokens.readDevice(user.token));
-    if (previousDevice && previousDevice !== deviceId) {
-      throw new AuthError('DEVICE_MISMATCH', 'هذا الحساب مربوط بجهاز آخر');
+    const isAdmin = user.role === 'admin';
+    if (!isAdmin) {
+      if (!isDeviceId(deviceId)) {
+        throw new AuthError('INVALID_INPUT', 'معرف الجهاز (x-device-id) مفقود أو غير صالح', 'x-device-id');
+      }
+      const previousDevice = user.deviceId || (user.token && tokens.readDevice(user.token));
+      if (previousDevice && previousDevice !== deviceId) {
+        throw new AuthError('DEVICE_MISMATCH', 'هذا الحساب مربوط بجهاز آخر');
+      }
     }
     const profile = publicUser(user);
-    const token = tokens.issue({ ...profile, deviceId });
-    if (!(await users.replaceToken(user.id, user.token, token, deviceId))) {
+    const effectiveDeviceId = isAdmin ? null : deviceId;
+    const token = tokens.issue({ ...profile, deviceId: effectiveDeviceId });
+    if (!(await users.replaceToken(user.id, user.token, token, effectiveDeviceId, { isAdmin }))) {
       throw new AuthError('LOGIN_CONFLICT', 'Login changed concurrently. Try again.');
     }
     return { token, user: profile };
   }
 
   async function authenticate({ token, deviceId }) {
-    if (!token || !isDeviceId(deviceId)) {
+    if (!token) {
       throw new AuthError('UNAUTHENTICATED', 'غير مصرح بالدخول');
     }
     const claims = tokens.verify(token);
-    if (claims.deviceId !== deviceId) {
-      throw new AuthError('DEVICE_MISMATCH', 'الجهاز غير مطابق للتوكين');
-    }
     const session = await users.findSession(claims.id);
     if (!session) {
       throw new AuthError('UNAUTHENTICATED', 'المستخدم غير موجود أو تم حذفه');
@@ -56,8 +62,16 @@ function createAuthUseCases({ users, passwords, tokens, branches }) {
     if (session.token !== token) {
       throw new AuthError('SESSION_REPLACED', 'التوكين غير صالح أو تم الدخول من جهاز آخر');
     }
-    if (session.deviceId && session.deviceId !== deviceId) {
-      throw new AuthError('DEVICE_MISMATCH', 'هذا الحساب مربوط بجهاز آخر');
+    if (session.role !== 'admin') {
+      if (!isDeviceId(deviceId)) {
+        throw new AuthError('UNAUTHENTICATED', 'غير مصرح بالدخول');
+      }
+      if (claims.deviceId !== deviceId) {
+        throw new AuthError('DEVICE_MISMATCH', 'الجهاز غير مطابق للتوكين');
+      }
+      if (session.deviceId && session.deviceId !== deviceId) {
+        throw new AuthError('DEVICE_MISMATCH', 'هذا الحساب مربوط بجهاز آخر');
+      }
     }
     return {
       ...claims,
@@ -67,7 +81,17 @@ function createAuthUseCases({ users, passwords, tokens, branches }) {
     };
   }
 
-  return { register, login, authenticate };
+  async function listUsers() {
+    if (!users.listUsers) return [];
+    return users.listUsers();
+  }
+
+  async function listBranches() {
+    if (!users.listBranches) return [];
+    return users.listBranches();
+  }
+
+  return { register, login, authenticate, listUsers, listBranches };
 }
 
 module.exports = { createAuthUseCases };

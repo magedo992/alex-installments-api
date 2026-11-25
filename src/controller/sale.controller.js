@@ -106,8 +106,29 @@ function createSaleController(saleService) {
     }
   }
 
+  async function search(req, res) {
+    try {
+      const result = await saleService.searchSales({
+        user: req.user,
+        query: req.query,
+      });
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      console.error('[SaleController] Search error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'حدث خطأ أثناء البحث عن الفواتير',
+      });
+    }
+  }
+
   return {
     create,
+    search,
     recordPayment,
     getOverdue,
     addNote,

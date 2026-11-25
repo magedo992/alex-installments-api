@@ -1,3 +1,4 @@
+const path = require('node:path');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -50,7 +51,12 @@ const authLimiter = rateLimit({
   message: { success: false, message: 'محاولات دخول كثيرة جداً، يرجى الانتظار 15 دقيقة والمحاولة لاحقاً' },
 });
 
+app.use(express.static(path.join(__dirname, '../public')));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/admin.html'));
+});
 
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Alex Project API' });

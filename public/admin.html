@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>لوحة الأدمن — إدارة المستخدمين</title>
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <main class="container">
+    <header class="page-header">
+      <div>
+        <h1>لوحة تحكم الأدمن</h1>
+        <p class="subtitle">تسجيل دخول المسؤول وإضافة مستخدمي النظام</p>
+      </div>
+      <div id="session-bar" class="session-bar" hidden>
+        <span id="admin-badge" class="admin-badge"></span>
+        <button type="button" id="logout-btn" class="btn btn-secondary">تسجيل الخروج</button>
+      </div>
+    </header>
+
+    <div id="global-status" class="status-banner" role="status" aria-live="polite" hidden></div>
+
+    <!-- Sign-in View -->
+    <section id="login-section" class="card" aria-labelledby="login-heading">
+      <h2 id="login-heading">تسجيل دخول الأدمن</h2>
+      <p class="section-desc">سجّل الدخول باستخدام اسم المستخدم أو البريد الإلكتروني وكلمة المرور.</p>
+
+      <form id="login-form" novalidate>
+        <div class="field">
+          <label for="login-identifier">اسم المستخدم أو البريد الإلكتروني</label>
+          <span id="login-identifier-hint" class="hint">أدخل username أو البريد الإلكتروني المسجل لحساب الأدمن</span>
+          <input
+            type="text"
+            id="login-identifier"
+            name="username"
+            autocomplete="username"
+            spellcheck="false"
+            autocapitalize="off"
+            autocorrect="off"
+            enterkeyhint="next"
+            required
+            aria-describedby="login-identifier-hint"
+            data-error="login-identifier-error"
+          >
+          <div id="login-identifier-error" class="error-msg">
+            <span role="img" aria-label="خطأ">❌</span> يرجى إدخال اسم المستخدم أو البريد الإلكتروني.
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="login-password">كلمة المرور</label>
+          <div class="password-wrap">
+            <input
+              type="password"
+              id="login-password"
+              name="password"
+              autocomplete="current-password"
+              enterkeyhint="done"
+              required
+              data-error="login-password-error"
+            >
+            <button type="button" class="toggle-pw" data-target="login-password" aria-pressed="false">إظهار</button>
+          </div>
+          <div id="login-password-error" class="error-msg">
+            <span role="img" aria-label="خطأ">❌</span> يرجى إدخال كلمة المرور.
+          </div>
+        </div>
+
+        <button type="submit" id="login-submit" class="btn btn-primary">تسجيل الدخول</button>
+      </form>
+    </section>
+
+    <!-- Admin Dashboard View -->
+    <div id="dashboard-section" hidden>
+      <section class="card" aria-labelledby="create-user-heading">
+        <h2 id="create-user-heading">إضافة مستخدم جديد</h2>
+        <p class="section-desc">حدد بيانات المستخدم الجديد ودوره الوظيفي والفرع التابع له.</p>
+
+        <form id="create-user-form" novalidate>
+          <div class="grid-2">
+            <div class="field">
+              <label for="new-username">اسم المستخدم (Username)</label>
+              <span id="new-username-hint" class="hint">يُستخدم لتسجيل الدخول (بدون تكرار، بحد أقصى 100 حرف)</span>
+              <input
+                type="text"
+                id="new-username"
+                name="username"
+                autocomplete="off"
+                spellcheck="false"
+                autocapitalize="off"
+                autocorrect="off"
+                maxlength="100"
+                required
+                aria-describedby="new-username-hint"
+                data-error="new-username-error"
+              >
+              <div id="new-username-error" class="error-msg">
+                <span role="img" aria-label="خطأ">❌</span> اسم المستخدم مطلوب ولا يتجاوز 100 حرف.
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="new-email">البريد الإلكتروني</label>
+              <span id="new-email-hint" class="hint">الصيغة: name@example.com</span>
+              <input
+                type="email"
+                id="new-email"
+                name="email"
+                autocomplete="off"
+                spellcheck="false"
+                required
+                aria-describedby="new-email-hint"
+                data-error="new-email-error"
+              >
+              <div id="new-email-error" class="error-msg">
+                <span role="img" aria-label="خطأ">❌</span> أدخل بريداً إلكترونياً صالحاً مثل name@example.com.
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="new-password">كلمة المرور</label>
+              <span id="new-password-hint" class="hint">8 أحرف على الأقل (بحد أقصى 72 بايت)</span>
+              <div class="password-wrap">
+                <input
+                  type="password"
+                  id="new-password"
+                  name="password"
+                  autocomplete="new-password"
+                  minlength="8"
+                  maxlength="72"
+                  required
+                  aria-describedby="new-password-hint"
+                  data-error="new-password-error"
+                >
+                <button type="button" class="toggle-pw" data-target="new-password" aria-pressed="false">إظهار</button>
+              </div>
+              <div id="new-password-error" class="error-msg">
+                <span role="img" aria-label="خطأ">❌</span> كلمة المرور يجب ألا تقل عن 8 أحرف.
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="new-role">الصلاحية (Role)</label>
+              <span id="new-role-hint" class="hint">موظف الفرع يتطلب تحديد فرع؛ المحاسب والأدمن بدون فرع</span>
+              <select id="new-role" name="role" required aria-describedby="new-role-hint" data-error="new-role-error">
+                <option value="employee">موظف فرع (employee)</option>
+                <option value="accountant">محاسب عام (accountant)</option>
+                <option value="admin">مدير نظام (admin)</option>
+              </select>
+              <div id="new-role-error" class="error-msg">
+                <span role="img" aria-label="خطأ">❌</span> يرجى اختيار الصلاحية.
+              </div>
+            </div>
+          </div>
+
+          <div class="field" id="branch-field">
+            <label for="new-branch-select">الفرع</label>
+            <span id="new-branch-hint" class="hint">إلزامي لحساب موظف الفرع (employee)</span>
+            <select id="new-branch-select" name="branch_id_select" aria-describedby="new-branch-hint" data-error="new-branch-error">
+              <option value="">اختر الفرع...</option>
+            </select>
+            <input
+              type="number"
+              id="new-branch-input"
+              name="branch_id_manual"
+              min="1"
+              step="1"
+              inputmode="numeric"
+              placeholder="أدخل رقم الفرع (مثال: 1)"
+              hidden
+              aria-describedby="new-branch-hint"
+              data-error="new-branch-error"
+            >
+            <div id="new-branch-error" class="error-msg">
+              <span role="img" aria-label="خطأ">❌</span> يرجى تحديد فرع صالح لموظف الفرع.
+            </div>
+          </div>
+
+          <div class="field" id="device-field">
+            <label for="new-device-id">بصمة الجهاز (Device ID)</label>
+            <span id="new-device-hint" class="hint">معرف جهاز المستخدم (بدون مسافات أو فواصل؛ اختياري للأدمن أو للربط عند أول دخول)</span>
+            <input
+              type="text"
+              id="new-device-id"
+              name="device_id"
+              autocomplete="off"
+              spellcheck="false"
+              autocapitalize="off"
+              autocorrect="off"
+              maxlength="256"
+              pattern="[^\s,]+"
+              placeholder="مثال: pos-branch1-pc01"
+              aria-describedby="new-device-hint"
+              data-error="new-device-error"
+            >
+            <div id="new-device-error" class="error-msg">
+              <span role="img" aria-label="خطأ">❌</span> بصمة الجهاز يجب ألا تحتوي على مسافات أو فواصل وألا تتجاوز 256 حرفاً.
+            </div>
+          </div>
+
+          <button type="submit" id="create-user-submit" class="btn btn-primary">إنشاء المستخدم</button>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="users-list-heading">
+        <div class="section-header-row">
+          <h2 id="users-list-heading">المستخدمون الحاليون</h2>
+          <button type="button" id="refresh-users-btn" class="btn btn-secondary">تحديث القائمة</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>اسم المستخدم</th>
+                <th>البريد الإلكتروني</th>
+                <th>الصلاحية</th>
+                <th>رقم الفرع</th>
+                <th>بصمة الجهاز</th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody">
+              <tr>
+                <td colspan="5" class="empty-cell">جارٍ التحميل...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/admin.js"></script>
+</body>
+</html>
