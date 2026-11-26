@@ -5,8 +5,11 @@ const {
   validate,
   createSaleSchema,
   searchSalesSchema,
+  saleDetailsParamsSchema,
+  saleByInvoiceParamsSchema,
   recordPaymentSchema,
   overdueSalesSchema,
+  followUpSalesSchema,
   addNoteSchema,
 } = require('../middlewares/validate.middleware');
 
@@ -21,6 +24,9 @@ function createSaleRoutes(pool, protect) {
   router.post('/', protect, validate(createSaleSchema), controller.create);
   router.post('/:id/payments', protect, validate(recordPaymentSchema), controller.recordPayment);
   router.get('/overdue', protect, validate(overdueSalesSchema, 'query'), controller.getOverdue);
+  router.get('/follow-up', protect, validate(followUpSalesSchema, 'query'), controller.getFollowUp);
+  router.get('/by-invoice/:invoice_number', protect, validate(saleByInvoiceParamsSchema, 'params'), controller.getOne);
+  router.get('/:id', protect, validate(saleDetailsParamsSchema, 'params'), controller.getOne);
   router.post('/:id/notes', protect, validate(addNoteSchema), controller.addNote);
 
   return router;

@@ -431,3 +431,76 @@ test('POST /api/customers rejects invalid phone numbers or short customer names 
     server.close();
   }
 });
+
+test('GET /api/customers returns customer guarantors and sales scoped by branch', async () => {
+  const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
+
+  let capturedDataSql = '';
+  let capturedDataParams = [];
+  const mockCustomers = [
+    {
+      id: 1,
+      customer_code: '3000001',
+      name: 'أحمد محمود',
+      normalized_name: 'احمد محمود',
+      phones: [{ id: 10, phone: '01012345678', is_primary: true, label: 'شخصي' }],
+      current_address: { id: 20, area: 'الاصلاح', housing_type: 'ملك', address_details: null },
+      guarantors: [
+        {
+          id: 5,
+          sale_id: 50,
+          invoice_number: 'A116',
+          name: 'محمود السيد',
+          phones: [{ id: 11, phone: '01112345678', is_primary: true, label: 'موبايل' }],
+        },
+      ],
+      sales: [
+        {
+          sale_id: 50,
+          invoice_number: 'A116',
+          branch_id: 2,
+          branch_name: 'الاصلاح',
+          item_details: 'ثلاجة',
+          remaining_amount: 4000,
+          status: 'active',
+        },
+      ],
+    },
+  ];
+
+  const poolMock = {
+    async query(sql, params) {
+      if (sql.includes('COUNT(*)')) {
+        return { rows: [{ total: 1 }] };
+      }
+      capturedDataSql = sql;
+      capturedDataParams = params;
+      return { rows: mockCustomers };
+    },
+  };
+
+  const app = createTestApp(poolMock, auth);
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/customers?q=01012345678`, {
+      headers: {
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.success, true);
+    assert.equal(body.data[0].guarantors.length, 1);
+    assert.equal(body.data[0].guarantors[0].name, 'محمود السيد');
+    assert.equal(body.data[0].sales.length, 1);
+    assert.equal(body.data[0].sales[0].invoice_number, 'A116');
+    assert.match(capturedDataSql, /AS guarantors/);
+    assert.match(capturedDataSql, /AS sales/);
+    assert.equal(capturedDataParams[capturedDataParams.length - 1], 2);
+  } finally {
+    server.close();
+  }
+});

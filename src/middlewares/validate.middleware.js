@@ -139,12 +139,31 @@ const overdueSalesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+const followUpSalesSchema = z.object({
+  branch_id: z.coerce.number().int().positive().optional(),
+  day: z.coerce.number().int().min(1, 'اليوم يجب أن يكون بين 1 و 31').max(31, 'اليوم يجب أن يكون بين 1 و 31').optional(),
+  date: z.string().regex(dateRegex, 'صيغة التاريخ يجب أن تكون YYYY-MM-DD').optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 const searchSalesSchema = z.object({
   invoice_number: z.string().max(50).trim().optional(),
   q: z.string().max(100).trim().optional(),
   branch_id: z.coerce.number().int().positive().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+const saleDetailsParamsSchema = z.object({
+  id: z.string().trim().transform(toAsciiDigits)
+    .pipe(z.string().regex(/^\d+$/, 'معرف الفاتورة يجب أن يكون رقماً صحيحاً موجباً'))
+    .pipe(z.coerce.number().int().positive('معرف الفاتورة يجب أن يكون رقماً صحيحاً موجباً')),
+});
+
+const saleByInvoiceParamsSchema = z.object({
+  invoice_number: z.string().trim().min(1, 'رقم الفاتورة إلزامي')
+    .max(50, 'رقم الفاتورة طويل جداً').transform(toAsciiDigits),
 });
 
 const addNoteSchema = z.object({
@@ -162,7 +181,10 @@ module.exports = {
   searchCustomerSchema,
   createSaleSchema,
   searchSalesSchema,
+  saleDetailsParamsSchema,
+  saleByInvoiceParamsSchema,
   recordPaymentSchema,
   overdueSalesSchema,
+  followUpSalesSchema,
   addNoteSchema,
 };

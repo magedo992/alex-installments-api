@@ -58,7 +58,12 @@ function createCustomerController(customerService) {
   async function search(req, res) {
     try {
       const { q, page, limit } = req.query;
-      const result = await customerService.searchCustomers({ q, page, limit });
+      const result = await customerService.searchCustomers({
+        user: req.user,
+        q,
+        page,
+        limit,
+      });
 
       return res.status(200).json({
         success: true,

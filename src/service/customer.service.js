@@ -102,10 +102,13 @@ function createCustomerService(pool) {
     }
   }
 
-  async function searchCustomers({ q, page = 1, limit = 20 }) {
+  async function searchCustomers({ user = null, q, page = 1, limit = 20 }) {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const offset = (pageNum - 1) * limitNum;
+
+    const userBranch = user?.branch_id ?? user?.branchId;
+    const effectiveBranchId = userBranch !== null && userBranch !== undefined ? Number(userBranch) : null;
 
     const conditions = [];
     const params = [];
@@ -142,6 +145,15 @@ function createCustomerService(pool) {
     const limitParamIdx = dataParams.length - 1;
     const offsetParamIdx = dataParams.length;
 
+    let branchFilterSales = '';
+    let branchFilterGuarantors = '';
+    if (effectiveBranchId) {
+      dataParams.push(effectiveBranchId);
+      const branchParamIdx = dataParams.length;
+      branchFilterSales = ` AND sb.branch_id = $${branchParamIdx}`;
+      branchFilterGuarantors = ` AND s.branch_id = $${branchParamIdx}`;
+    }
+
     const dataSql = `
       SELECT 
         c.id,
@@ -174,7 +186,65 @@ function createCustomerService(pool) {
           FROM customer_addresses ca
           WHERE ca.customer_id = c.id AND ca.is_current = TRUE
           LIMIT 1
-        ) AS current_address
+        ) AS current_address,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'id', g.id,
+              'sale_id', g.sale_id,
+              'invoice_number', s.invoice_number,
+              'name', g.name,
+              'created_at', g.created_at,
+              'phones', COALESCE(
+                (
+                  SELECT json_agg(json_build_object(
+                    'id', gpn.id,
+                    'phone', gpn.phone,
+                    'is_primary', gpn.is_primary,
+                    'label', gpn.label
+                  ) ORDER BY gpn.is_primary DESC, gpn.id ASC)
+                  FROM phone_numbers gpn
+                  WHERE gpn.guarantor_id = g.id
+                ), '[]'::json
+              )
+            ) ORDER BY g.id DESC)
+            FROM guarantors g
+            JOIN sales s ON s.id = g.sale_id
+            WHERE s.customer_id = c.id${branchFilterGuarantors}
+          ), '[]'::json
+        ) AS guarantors,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'sale_id', sb.sale_id,
+              'invoice_number', sb.invoice_number,
+              'branch_id', sb.branch_id,
+              'branch_name', b.name,
+              'item_details', sb.item_details,
+              'cash_price', sb.cash_price,
+              'down_payment', sb.down_payment,
+              'monthly_installment', sb.monthly_installment,
+              'installments_count', sb.installments_count,
+              'discount_amount', sb.discount_amount,
+              'total_amount', sb.total_amount,
+              'delivery_date', sb.delivery_date,
+              'first_installment_date', sb.first_installment_date,
+              'due_day', sb.due_day,
+              'collection_type', sb.collection_type,
+              'status', sb.status,
+              'total_paid', sb.total_paid,
+              'required_installments_total', sb.required_installments_total,
+              'remaining_amount', sb.remaining_amount,
+              'due_installments', sb.due_installments,
+              'due_amount', sb.due_amount,
+              'overdue_amount', sb.overdue_amount,
+              'created_at', sb.created_at
+            ) ORDER BY sb.sale_id DESC)
+            FROM sale_balances sb
+            LEFT JOIN branches b ON b.id = sb.branch_id
+            WHERE sb.customer_id = c.id${branchFilterSales}
+          ), '[]'::json
+        ) AS sales
       FROM customers c
       ${whereClause}
       ORDER BY c.id DESC

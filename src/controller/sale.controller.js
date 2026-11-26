@@ -1,4 +1,27 @@
 function createSaleController(saleService) {
+  async function getOne(req, res) {
+    try {
+      const result = await saleService.getSaleDetails({
+        user: req.user,
+        saleId: req.params.id,
+        invoiceNumber: req.params.invoice_number,
+      });
+
+      if (!result) {
+        return res.status(404).json({ success: false, message: 'الفاتورة المحددة غير موجودة' });
+      }
+
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      const status = [400, 403].includes(error.statusCode) ? error.statusCode : 500;
+      if (status === 500) console.error('[SaleController] Details error:', error);
+      return res.status(status).json({
+        success: false,
+        message: status === 500 ? 'حدث خطأ أثناء استرجاع تفاصيل الفاتورة' : error.message,
+      });
+    }
+  }
+
   async function create(req, res) {
     try {
       const result = await saleService.createSale({
@@ -126,11 +149,34 @@ function createSaleController(saleService) {
     }
   }
 
+  async function getFollowUp(req, res) {
+    try {
+      const result = await saleService.getFollowUpSales({
+        user: req.user,
+        query: req.query,
+      });
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      console.error('[SaleController] FollowUp error:', error);
+      const status = error.statusCode || 500;
+      return res.status(status).json({
+        success: false,
+        message: status === 403 ? error.message : 'حدث خطأ أثناء استرجاع قائمة المتابعة',
+      });
+    }
+  }
+
   return {
+    getOne,
     create,
     search,
     recordPayment,
     getOverdue,
+    getFollowUp,
     addNote,
   };
 }

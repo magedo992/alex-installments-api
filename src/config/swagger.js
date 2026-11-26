@@ -495,8 +495,8 @@ const swaggerDocument = {
       },
       get: {
         tags: ['Customers'],
-        summary: 'البحث عن العملاء واسترجاع بياناتهم',
-        description: 'بحث سريع ومرن يدعم الاسم العربي المطبع، كود العميل، أو رقم الهاتف من جدول phone_numbers. يدعم الـ Pagination.',
+        summary: 'البحث عن العملاء واسترجاع بياناتهم والضامنين وجميع عملياتهم',
+        description: 'بحث سريع ومرن يدعم الاسم العربي المطبع، كود العميل، أو رقم الهاتف من جدول phone_numbers. يرجع بيانات العميل وهواتفه وعنوانه مع جميع الضامنين (guarantors) وجميع فواتيره/عملياته (sales) مقيدة بفرع الموظف إن وُجد. يدعم الـ Pagination.',
         security: [
           {
             bearerAuth: [],
@@ -566,8 +566,8 @@ const swaggerDocument = {
     '/api/sales': {
       get: {
         tags: ['Sales'],
-        summary: 'البحث عن الفواتير برقم الفاتورة (invoice_number) أو اسم/كود العميل',
-        description: 'يُستخدم للبحث عن الفاتورة برقم الفاتورة (invoice_number) الذي أدخله الموظف يدوياً (مثل A116) أو باسم العميل/هاتفه لعرض الرصيد المتبقي قبل تسجيل دفع القسط.',
+        summary: 'البحث عن الفواتير برقم الفاتورة (invoice_number) أو اسم/كود/هاتف العميل',
+        description: 'عند البحث بـ invoice_number تُرجع الفاتورة المطلوبة فقط بكل تفاصيلها (العميل، الهواتف، العنوان، الضامنين، سجل الدفعات، الملاحظات، والأرصدة). أما عند البحث العام بـ q (اسم العميل أو كوده أو رقم الهاتف) فتُرجع جميع الفواتير الخاصة بالعميل مع أرصدتها.',
         security: [
           {
             bearerAuth: [],
@@ -780,6 +780,78 @@ const swaggerDocument = {
         },
       },
     },
+    '/api/sales/{id}': {
+      get: {
+        tags: ['Sales'],
+        summary: 'عرض تفاصيل فاتورة محددة بواسطة معرفها (id)',
+        description: 'يُرجع كامل تفاصيل الفاتورة المختارة بواسطة sales.id (بيانات الفاتورة، الأرصدة، بيانات العميل وهواتفه، العنوان، الضامنين وهواتفهم، سجل الدفعات، وملاحظات المتابعة) مع تطبيق تقييد الفرع.',
+        security: [
+          {
+            bearerAuth: [],
+            deviceIdAuth: [],
+          },
+        ],
+        parameters: [
+          {
+            name: 'x-device-id',
+            in: 'header',
+            required: false,
+            description: 'بصمة الجهاز (إلزامية للموظف والمحاسب، وغير مطلوبة للأدمن)',
+            schema: { type: 'string', example: 'device-unique-fingerprint-123' },
+          },
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            description: 'معرف الفاتورة الداخلي (sales.id)',
+            schema: { type: 'integer', example: 50 },
+          },
+        ],
+        responses: {
+          200: { description: 'تفاصيل الفاتورة الكاملة' },
+          400: { description: 'معرف الفاتورة غير صالح' },
+          401: { description: 'غير مصرح بالدخول' },
+          403: { description: 'غير مصرح بعرض فاتورة تخص فرع آخر أو الجهاز غير مطابق' },
+          404: { description: 'الفاتورة غير موجودة' },
+        },
+      },
+    },
+    '/api/sales/by-invoice/{invoice_number}': {
+      get: {
+        tags: ['Sales'],
+        summary: 'عرض تفاصيل فاتورة محددة مباشرة برقم الفاتورة (invoice_number)',
+        description: 'يُرجع كامل تفاصيل الفاتورة (بيانات الفاتورة، الأرصدة، العميل، العنوان، الضامنين، الدفعات، والملاحظات) عند البحث المباشر برقم الفاتورة اليدوي مثل A116.',
+        security: [
+          {
+            bearerAuth: [],
+            deviceIdAuth: [],
+          },
+        ],
+        parameters: [
+          {
+            name: 'x-device-id',
+            in: 'header',
+            required: false,
+            description: 'بصمة الجهاز (إلزامية للموظف والمحاسب، وغير مطلوبة للأدمن)',
+            schema: { type: 'string', example: 'device-unique-fingerprint-123' },
+          },
+          {
+            name: 'invoice_number',
+            in: 'path',
+            required: true,
+            description: 'رقم الفاتورة اليدوي (مثل A116)',
+            schema: { type: 'string', example: 'A116' },
+          },
+        ],
+        responses: {
+          200: { description: 'تفاصيل الفاتورة الكاملة' },
+          400: { description: 'رقم الفاتورة غير صالح' },
+          401: { description: 'غير مصرح بالدخول' },
+          403: { description: 'غير مصرح بعرض فاتورة تخص فرع آخر أو الجهاز غير مطابق' },
+          404: { description: 'الفاتورة غير موجودة' },
+        },
+      },
+    },
     '/api/sales/{id}/payments': {
       post: {
         tags: ['Sales'],
@@ -858,6 +930,68 @@ const swaggerDocument = {
           500: {
             description: 'خطأ داخلي أثناء تسجيل الدفعة',
           },
+        },
+      },
+    },
+    '/api/sales/follow-up': {
+      get: {
+        tags: ['Sales'],
+        summary: 'قائمة المتابعة اليومية للمتأخرين في السداد (حتى يوم محدد أو تاريخ اليوم)',
+        description: 'يرجع جميع العملاء المتأخرين في السداد (status = active و overdue_amount > 0) الذين يكون يوم استحقاقهم (due_day) أقل من أو يساوي اليوم المحدد (مثلاً يوم 25 يجلب كل المتأخرين من يوم 1 حتى 25). إذا لم يُرسل day أو date يُستخدم يوم اليوم تلقائياً بتوقيت القاهرة. يرجع كامل بيانات العميل، الهواتف، العنوان، الضامنين وهواتفهم، تفاصيل الفاتورة والأرصدة، وآخر ملاحظة وسجل الملاحظات.',
+        security: [
+          {
+            bearerAuth: [],
+            deviceIdAuth: [],
+          },
+        ],
+        parameters: [
+          {
+            name: 'x-device-id',
+            in: 'header',
+            required: false,
+            description: 'بصمة الجهاز (إلزامية للموظف والمحاسب، وغير مطلوبة للأدمن)',
+            schema: { type: 'string', example: 'device-unique-fingerprint-123' },
+          },
+          {
+            name: 'day',
+            in: 'query',
+            required: false,
+            description: 'رقم اليوم في الشهر (1 - 31) لجلب المتأخرين حتى هذا اليوم شاملة (الافتراضي يوم اليوم)',
+            schema: { type: 'integer', minimum: 1, maximum: 31, example: 25 },
+          },
+          {
+            name: 'date',
+            in: 'query',
+            required: false,
+            description: 'تاريخ بصيغة YYYY-MM-DD لاستخراج اليوم منه في حال عدم إرسال day',
+            schema: { type: 'string', format: 'date', example: '2026-11-25' },
+          },
+          {
+            name: 'branch_id',
+            in: 'query',
+            required: false,
+            description: 'معرف الفرع (للأدمن والمحاسب فقط؛ موظف الفرع يُحدد فرعه تلقائياً)',
+            schema: { type: 'integer', example: 1 },
+          },
+          {
+            name: 'page',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', default: 1, example: 1 },
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', default: 20, example: 20 },
+          },
+        ],
+        responses: {
+          200: { description: 'قائمة المتابعة مع كامل بيانات العملاء والضامنين والأرصدة والملاحظات' },
+          400: { description: 'معاملات الفلترة غير صالحة' },
+          401: { description: 'غير مصرح بالدخول' },
+          403: { description: 'غير مصرح أو الجهاز غير مطابق' },
+          500: { description: 'خطأ أثناء استرجاع قائمة المتابعة' },
         },
       },
     },

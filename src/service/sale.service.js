@@ -2,6 +2,121 @@ const { firstOfMonth } = require('../lib/date-helpers');
 const { toAsciiDigits } = require('../lib/arabic');
 
 function createSaleService(pool) {
+  async function getSaleDetails({ user, saleId, invoiceNumber }) {
+    const userBranch = user?.branch_id ?? user?.branchId;
+    const hasBranch = userBranch !== null && userBranch !== undefined;
+    const branchId = hasBranch ? Number(userBranch) : null;
+
+    if ((hasBranch && (!Number.isSafeInteger(branchId) || branchId <= 0)) ||
+        (!hasBranch && !['admin', 'accountant'].includes(user?.role))) {
+      const error = new Error('غير مصرح لك بعرض الفواتير دون فرع صالح');
+      error.statusCode = 403;
+      throw error;
+    }
+
+    // Keep internal IDs and invoice numbers separate, including numeric invoice numbers.
+    const byInvoice = invoiceNumber !== undefined;
+    const identifier = byInvoice && typeof invoiceNumber === 'string'
+      ? toAsciiDigits(invoiceNumber).trim()
+      : saleId;
+    if ((byInvoice && (saleId !== undefined || typeof identifier !== 'string' ||
+         !identifier || identifier.length > 50)) ||
+        (!byInvoice && (!Number.isSafeInteger(identifier) || identifier <= 0))) {
+      const error = new Error('معرف الفاتورة أو رقمها غير صالح');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const params = [identifier];
+    const conditions = [byInvoice ? 'LOWER(s.invoice_number) = LOWER($1)' : 's.id = $1::bigint'];
+    if (hasBranch) {
+      params.push(branchId);
+      conditions.push('s.branch_id = $2');
+    }
+
+    // Each collection is aggregated separately so phones/payments/notes never multiply rows.
+    const result = await pool.query(`
+      SELECT
+        s.*,
+        (
+          SELECT json_build_object('id', b.id, 'name', b.name)
+          FROM branches b WHERE b.id = s.branch_id
+        ) AS branch,
+        (
+          SELECT json_build_object(
+            'id', c.id,
+            'customer_code', c.customer_code,
+            'name', c.name,
+            'phones', COALESCE((
+              SELECT json_agg(json_build_object(
+                'id', pn.id, 'phone', pn.phone,
+                'is_primary', pn.is_primary, 'label', pn.label
+              ) ORDER BY pn.is_primary DESC, pn.id ASC)
+              FROM phone_numbers pn WHERE pn.customer_id = c.id
+            ), '[]'::json)
+          )
+          FROM customers c WHERE c.id = s.customer_id
+        ) AS customer,
+        (
+          SELECT json_build_object(
+            'id', ca.id, 'area', ca.area, 'housing_type', ca.housing_type,
+            'address_details', ca.address_details, 'is_current', ca.is_current
+          )
+          FROM customer_addresses ca
+          WHERE ca.id = s.address_id AND ca.customer_id = s.customer_id
+        ) AS address,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'id', g.id, 'sale_id', g.sale_id, 'name', g.name, 'created_at', g.created_at,
+            'phones', COALESCE((
+              SELECT json_agg(json_build_object(
+                'id', gp.id, 'phone', gp.phone,
+                'is_primary', gp.is_primary, 'label', gp.label
+              ) ORDER BY gp.is_primary DESC, gp.id ASC)
+              FROM phone_numbers gp WHERE gp.guarantor_id = g.id
+            ), '[]'::json)
+          ) ORDER BY g.id ASC)
+          FROM guarantors g WHERE g.sale_id = s.id
+        ), '[]'::json) AS guarantors,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'id', p.id, 'sale_id', p.sale_id, 'amount', p.amount,
+            'payment_month', p.payment_month, 'payment_date', p.payment_date,
+            'notes', p.notes, 'created_at', p.created_at
+          ) ORDER BY p.payment_date ASC, p.id ASC)
+          FROM payments p WHERE p.sale_id = s.id
+        ), '[]'::json) AS payments,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'id', sn.id, 'sale_id', sn.sale_id, 'created_by_user_id', sn.created_by_user_id,
+            'note_type', sn.note_type, 'content', sn.content,
+            'follow_up_date', sn.follow_up_date, 'created_at', sn.created_at
+          ) ORDER BY sn.id DESC)
+          FROM sale_notes sn WHERE sn.sale_id = s.id
+        ), '[]'::json) AS notes,
+        sb.total_paid,
+        sb.required_installments_total,
+        sb.remaining_amount,
+        sb.due_installments,
+        sb.due_amount,
+        sb.overdue_amount
+      FROM sales s
+      LEFT JOIN sale_balances sb ON sb.sale_id = s.id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY s.id ASC
+      LIMIT 1
+    `, params);
+
+    const sale = result.rows[0];
+    if (!sale) return null;
+
+    return {
+      ...sale,
+      // Preserve the singular shape used by createSale without losing legacy guarantors.
+      guarantor: sale.guarantors[0] ?? null,
+    };
+  }
+
   async function createSale({ user, saleData }) {
     const {
       invoice_number,
@@ -390,6 +505,184 @@ function createSaleService(pool) {
     };
   }
 
+  async function getFollowUpSales({ user, query = {} }) {
+    const { branch_id, day, date, page = 1, limit = 20 } = query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const offset = (pageNum - 1) * limitNum;
+
+    const userBranch = user?.branch_id ?? user?.branchId;
+    const hasBranch = userBranch !== null && userBranch !== undefined;
+    let effectiveBranchId = null;
+
+    if (hasBranch) {
+      effectiveBranchId = Number(userBranch);
+      if (!Number.isSafeInteger(effectiveBranchId) || effectiveBranchId <= 0) {
+        const forbiddenErr = new Error('غير مصرح لك بعرض قائمة المتابعة دون فرع صالح');
+        forbiddenErr.statusCode = 403;
+        throw forbiddenErr;
+      }
+    } else if (!['admin', 'accountant'].includes(user?.role)) {
+      const forbiddenErr = new Error('غير مصرح لك بعرض قائمة المتابعة دون فرع محدد');
+      forbiddenErr.statusCode = 403;
+      throw forbiddenErr;
+    } else if (branch_id) {
+      effectiveBranchId = Number(branch_id);
+    }
+
+    let filterDay;
+    if (day !== undefined && day !== null && day !== '') {
+      filterDay = parseInt(day, 10);
+    } else if (date && /^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+      filterDay = parseInt(String(date).split('-')[2], 10);
+    } else {
+      filterDay = Number(
+        new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', day: 'numeric' }).format(new Date())
+      );
+    }
+
+    const conditions = ["sb.status = 'active'", "sb.overdue_amount > 0", 'sb.due_day <= $1'];
+    const params = [filterDay];
+
+    if (effectiveBranchId) {
+      params.push(effectiveBranchId);
+      conditions.push(`sb.branch_id = $${params.length}`);
+    }
+
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+    const countSql = `SELECT COUNT(*) AS total FROM sale_balances sb ${whereClause}`;
+    const countRes = await pool.query(countSql, params);
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+    const dataParams = [...params, limitNum, offset];
+    const limitParamIdx = dataParams.length - 1;
+    const offsetParamIdx = dataParams.length;
+
+    const dataSql = `
+      SELECT
+        sb.sale_id,
+        sb.invoice_number,
+        sb.branch_id,
+        b.name AS branch_name,
+        sb.customer_id,
+        c.customer_code,
+        c.name AS customer_name,
+        c.risk_level,
+        c.general_note,
+        (
+          SELECT json_build_object(
+            'id', ca.id,
+            'area', ca.area,
+            'housing_type', ca.housing_type,
+            'address_details', ca.address_details
+          )
+          FROM customer_addresses ca
+          WHERE ca.id = sb.address_id
+          LIMIT 1
+        ) AS address,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'id', pn.id,
+              'phone', pn.phone,
+              'is_primary', pn.is_primary,
+              'label', pn.label
+            ) ORDER BY pn.is_primary DESC, pn.id ASC)
+            FROM phone_numbers pn
+            WHERE pn.customer_id = sb.customer_id
+          ), '[]'::json
+        ) AS customer_phones,
+        sb.item_details,
+        sb.cash_price,
+        sb.down_payment,
+        sb.monthly_installment,
+        sb.installments_count,
+        sb.discount_amount,
+        sb.total_amount,
+        sb.delivery_date,
+        sb.first_installment_date,
+        sb.due_day,
+        sb.collection_type,
+        sb.status,
+        sb.total_paid,
+        sb.required_installments_total,
+        sb.remaining_amount,
+        sb.due_installments,
+        sb.due_amount,
+        sb.overdue_amount,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'id', g.id,
+              'name', g.name,
+              'created_at', g.created_at,
+              'phones', COALESCE(
+                (
+                  SELECT json_agg(json_build_object(
+                    'id', gpn.id,
+                    'phone', gpn.phone,
+                    'is_primary', gpn.is_primary,
+                    'label', gpn.label
+                  ) ORDER BY gpn.is_primary DESC, gpn.id ASC)
+                  FROM phone_numbers gpn
+                  WHERE gpn.guarantor_id = g.id
+                ), '[]'::json
+              )
+            ) ORDER BY g.id ASC)
+            FROM guarantors g
+            WHERE g.sale_id = sb.sale_id
+          ), '[]'::json
+        ) AS guarantors,
+        (
+          SELECT json_build_object(
+            'id', sn.id,
+            'note_type', sn.note_type,
+            'content', sn.content,
+            'follow_up_date', sn.follow_up_date,
+            'created_at', sn.created_at
+          )
+          FROM sale_notes sn
+          WHERE sn.sale_id = sb.sale_id
+          ORDER BY sn.id DESC
+          LIMIT 1
+        ) AS latest_note,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'id', sn.id,
+              'created_by_user_id', sn.created_by_user_id,
+              'note_type', sn.note_type,
+              'content', sn.content,
+              'follow_up_date', sn.follow_up_date,
+              'created_at', sn.created_at
+            ) ORDER BY sn.id DESC)
+            FROM sale_notes sn
+            WHERE sn.sale_id = sb.sale_id
+          ), '[]'::json
+        ) AS notes
+      FROM sale_balances sb
+      JOIN customers c ON c.id = sb.customer_id
+      LEFT JOIN branches b ON b.id = sb.branch_id
+      ${whereClause}
+      ORDER BY sb.due_day ASC, sb.overdue_amount DESC
+      LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
+    `;
+
+    const dataRes = await pool.query(dataSql, dataParams);
+
+    return {
+      filter_day: filterDay,
+      data: dataRes.rows,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 1,
+      },
+    };
+  }
+
   async function addSaleNote({ user, saleId, noteData }) {
     const rawIdentifier = toAsciiDigits(String(saleId ?? '')).trim();
     if (!rawIdentifier || (/^-?\d+$/.test(rawIdentifier) && Number(rawIdentifier) <= 0)) {
@@ -485,6 +778,95 @@ function createSaleService(pool) {
     const limitParamIdx = dataParams.length - 1;
     const offsetParamIdx = dataParams.length;
 
+    const isDirectInvoiceLookup = Boolean(invoice_number && String(invoice_number).trim());
+    const detailColumns = isDirectInvoiceLookup
+      ? `,
+        sb.cash_price,
+        sb.down_payment,
+        sb.discount_amount,
+        sb.total_amount,
+        sb.delivery_date,
+        sb.collection_type,
+        sb.created_at,
+        sb.updated_at,
+        c.risk_level,
+        c.general_note,
+        (
+          SELECT json_build_object(
+            'id', ca.id,
+            'area', ca.area,
+            'housing_type', ca.housing_type,
+            'address_details', ca.address_details
+          )
+          FROM customer_addresses ca
+          WHERE ca.id = sb.address_id
+          LIMIT 1
+        ) AS address,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'id', pn.id,
+              'phone', pn.phone,
+              'is_primary', pn.is_primary,
+              'label', pn.label
+            ) ORDER BY pn.is_primary DESC, pn.id ASC)
+            FROM phone_numbers pn
+            WHERE pn.customer_id = sb.customer_id
+          ), '[]'::json
+        ) AS customer_phones,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'id', g.id,
+              'name', g.name,
+              'created_at', g.created_at,
+              'phones', COALESCE(
+                (
+                  SELECT json_agg(json_build_object(
+                    'id', gpn.id,
+                    'phone', gpn.phone,
+                    'is_primary', gpn.is_primary,
+                    'label', gpn.label
+                  ) ORDER BY gpn.is_primary DESC, gpn.id ASC)
+                  FROM phone_numbers gpn
+                  WHERE gpn.guarantor_id = g.id
+                ), '[]'::json
+              )
+            ) ORDER BY g.id ASC)
+            FROM guarantors g
+            WHERE g.sale_id = sb.sale_id
+          ), '[]'::json
+        ) AS guarantors,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'id', p.id,
+              'amount', p.amount,
+              'payment_month', p.payment_month,
+              'payment_date', p.payment_date,
+              'notes', p.notes,
+              'created_at', p.created_at
+            ) ORDER BY p.payment_date DESC, p.id DESC)
+            FROM payments p
+            WHERE p.sale_id = sb.sale_id
+          ), '[]'::json
+        ) AS payments,
+        COALESCE(
+          (
+            SELECT json_agg(json_build_object(
+              'id', sn.id,
+              'created_by_user_id', sn.created_by_user_id,
+              'note_type', sn.note_type,
+              'content', sn.content,
+              'follow_up_date', sn.follow_up_date,
+              'created_at', sn.created_at
+            ) ORDER BY sn.id DESC)
+            FROM sale_notes sn
+            WHERE sn.sale_id = sb.sale_id
+          ), '[]'::json
+        ) AS notes`
+      : '';
+
     const dataSql = `
       SELECT
         sb.sale_id,
@@ -512,7 +894,7 @@ function createSaleService(pool) {
         sb.due_installments,
         sb.due_amount,
         sb.overdue_amount,
-        sb.status
+        sb.status${detailColumns}
       FROM sale_balances sb
       JOIN customers c ON c.id = sb.customer_id
       LEFT JOIN branches b ON b.id = sb.branch_id
@@ -535,10 +917,12 @@ function createSaleService(pool) {
   }
 
   return {
+    getSaleDetails,
     createSale,
     searchSales,
     recordPayment,
     getOverdueSales,
+    getFollowUpSales,
     addSaleNote,
   };
 }

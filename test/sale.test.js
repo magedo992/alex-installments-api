@@ -811,3 +811,172 @@ test('POST /api/sales ignores any client id and requires invoice_number', async 
     server.close();
   }
 });
+
+test('GET /api/sales/:id and GET /api/sales?invoice_number=... return full invoice details', async () => {
+  const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 1 });
+
+  let capturedSearchSql = '';
+  let capturedDetailsParams = [];
+
+  const fullSaleRecord = {
+    id: 50,
+    sale_id: 50,
+    invoice_number: 'A116',
+    branch_id: 1,
+    branch: { id: 1, name: 'الحمد' },
+    customer: {
+      id: 10,
+      customer_code: '2000001',
+      name: 'أحمد علي',
+      phones: [{ id: 1, phone: '01012345678', is_primary: true, label: 'شخصي' }],
+    },
+    address: { id: 5, area: 'العجمي', housing_type: 'ملك', address_details: 'شارع 10' },
+    guarantors: [
+      {
+        id: 70,
+        sale_id: 50,
+        name: 'محمود السيد',
+        phones: [{ id: 2, phone: '01112345678', is_primary: true, label: 'موبايل' }],
+      },
+    ],
+    payments: [{ id: 1, sale_id: 50, amount: 1000, payment_date: '2026-11-24' }],
+    notes: [{ id: 1, sale_id: 50, note_type: 'call', content: 'تم الاتصال' }],
+    total_paid: 1000,
+    remaining_amount: 4000,
+    status: 'active',
+  };
+
+  const poolMock = {
+    async query(sql, params) {
+      if (sql.includes('COUNT(*)')) {
+        return { rows: [{ total: 1 }] };
+      }
+      if (sql.includes('FROM sales s')) {
+        capturedDetailsParams = params;
+        return { rows: [fullSaleRecord] };
+      }
+      capturedSearchSql = sql;
+      return { rows: [fullSaleRecord] };
+    },
+  };
+
+  const app = createTestApp(poolMock, auth);
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    const detailsRes = await fetch(`http://127.0.0.1:${port}/api/sales/50`, {
+      headers: {
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+    });
+    assert.equal(detailsRes.status, 200);
+    const detailsBody = await detailsRes.json();
+    assert.equal(detailsBody.success, true);
+    assert.equal(detailsBody.data.id, 50);
+    assert.equal(detailsBody.data.guarantors[0].name, 'محمود السيد');
+    assert.equal(detailsBody.data.payments.length, 1);
+    assert.equal(detailsBody.data.notes.length, 1);
+    assert.deepEqual(capturedDetailsParams, [50, 1]);
+
+    const searchInvoiceRes = await fetch(`http://127.0.0.1:${port}/api/sales?invoice_number=A116`, {
+      headers: {
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+    });
+    assert.equal(searchInvoiceRes.status, 200);
+    const searchInvoiceBody = await searchInvoiceRes.json();
+    assert.equal(searchInvoiceBody.success, true);
+    assert.equal(searchInvoiceBody.data[0].invoice_number, 'A116');
+    assert.match(capturedSearchSql, /AS guarantors/);
+    assert.match(capturedSearchSql, /AS payments/);
+    assert.match(capturedSearchSql, /AS notes/);
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/sales/follow-up filters overdue sales with due_day <= day (defaulting to today) and returns full customer & guarantor data', async () => {
+  const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
+
+  let capturedCountSql = '';
+  let capturedCountParams = [];
+  let capturedDataSql = '';
+
+  const mockFollowUpRows = [
+    {
+      sale_id: 50,
+      invoice_number: 'A116',
+      branch_id: 2,
+      branch_name: 'الاصلاح',
+      customer_id: 10,
+      customer_code: '3000001',
+      customer_name: 'أحمد محمود',
+      customer_phones: [{ id: 1, phone: '01012345678', is_primary: true, label: 'شخصي' }],
+      address: { id: 5, area: 'الاصلاح', housing_type: 'ملك', address_details: 'شارع 5' },
+      due_day: 20,
+      overdue_amount: 3000,
+      guarantors: [
+        {
+          id: 7,
+          name: 'محمود السيد',
+          phones: [{ id: 2, phone: '01112345678', is_primary: true, label: 'موبايل' }],
+        },
+      ],
+      latest_note: { id: 1, note_type: 'call', content: 'وعد بالسداد' },
+      notes: [{ id: 1, note_type: 'call', content: 'وعد بالسداد' }],
+    },
+  ];
+
+  const poolMock = {
+    async query(sql, params) {
+      if (sql.includes('COUNT(*)')) {
+        capturedCountSql = sql;
+        capturedCountParams = params;
+        return { rows: [{ total: 1 }] };
+      }
+      capturedDataSql = sql;
+      return { rows: mockFollowUpRows };
+    },
+  };
+
+  const app = createTestApp(poolMock, auth);
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/sales/follow-up?day=25&branch_id=1`, {
+      headers: {
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.success, true);
+    assert.equal(body.filter_day, 25);
+    assert.equal(body.data.length, 1);
+    assert.equal(body.data[0].customer_phones[0].phone, '01012345678');
+    assert.equal(body.data[0].guarantors[0].name, 'محمود السيد');
+    assert.match(capturedCountSql, /sb\.due_day <= \$1/);
+    assert.deepEqual(capturedCountParams, [25, 2]);
+    assert.match(capturedDataSql, /AS customer_phones/);
+    assert.match(capturedDataSql, /AS guarantors/);
+    assert.match(capturedDataSql, /AS notes/);
+
+    const defaultRes = await fetch(`http://127.0.0.1:${port}/api/sales/follow-up?date=2026-11-18`, {
+      headers: {
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+    });
+    assert.equal(defaultRes.status, 200);
+    const defaultBody = await defaultRes.json();
+    assert.equal(defaultBody.filter_day, 18);
+    assert.deepEqual(capturedCountParams, [18, 2]);
+  } finally {
+    server.close();
+  }
+});
