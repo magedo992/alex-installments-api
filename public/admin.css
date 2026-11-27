@@ -291,6 +291,11 @@ th {
   color: #166534;
 }
 
+.role-pill.follow_up {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
 .visually-hidden:where(:not(:focus-within, :active)) {
   position: absolute !important;
   clip-path: inset(50%) !important;

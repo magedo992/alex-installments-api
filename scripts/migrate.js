@@ -5,7 +5,7 @@ const { pool } = require('../src/config/db');
 async function migrate() {
   try {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is missing');
-    const sql = ['001_users.sql', '002_user_device.sql', '003_user_branch.sql', '004_sale_balances_and_notes.sql', '005_unique_username.sql']
+    const sql = ['001_users.sql', '002_user_device.sql', '003_user_branch.sql', '004_sale_balances_and_notes.sql', '005_unique_username.sql', '006_sales_manual_id.sql', '007_sale_status_and_payment_method.sql', '008_collection_branch_and_balance_fix.sql']
       .map((file) => readFileSync(join(__dirname, '../migrations', file), 'utf8'))
       .join('\n');
     await pool.query(`BEGIN;\n${sql}\nCOMMIT;`);

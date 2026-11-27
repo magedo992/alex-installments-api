@@ -218,10 +218,10 @@ test('POST /api/sales requires branch_id for admin user', async () => {
   }
 });
 
-test('POST /api/sales/:id/payments records payment and updates sale status to completed', async () => {
+test('POST /api/sales/:id/payments records payment with payment_method and updates sale status to منتهي', async () => {
   const { auth, validToken, deviceId } = createAuthFixture();
 
-  let saleStatus = 'active';
+  let saleStatus = 'منتظم';
   const targetTotal = 5000;
   let cumulativePaid = 4000;
 
@@ -252,18 +252,23 @@ test('POST /api/sales/:id/payments records payment and updates sale status to co
               amount: params[1],
               payment_month: params[2],
               payment_date: params[3],
-              notes: params[4],
+              payment_method: params[4],
+              collection_branch_id: params[5],
+              notes: params[6],
               created_at: new Date().toISOString(),
             },
           ],
         };
       }
+      if (sql.includes('SELECT name FROM branches WHERE id = $1')) {
+        return { rows: [{ name: 'ريتاج' }] };
+      }
       if (sql.includes('SELECT COALESCE(SUM(amount), 0) AS total_paid')) {
         return { rows: [{ total_paid: cumulativePaid }] };
       }
-      if (sql.includes('UPDATE sales SET status = \'completed\'')) {
-        saleStatus = 'completed';
-        return { rows: [{ status: 'completed' }] };
+      if (sql.includes("UPDATE sales SET status = 'منتهي'")) {
+        saleStatus = 'منتهي';
+        return { rows: [{ status: 'منتهي' }] };
       }
       return { rows: [] };
     },
@@ -292,7 +297,8 @@ test('POST /api/sales/:id/payments records payment and updates sale status to co
       body: JSON.stringify({
         amount: 1000,
         payment_date: '2026-11-24',
-        notes: 'القسط الأخير نقداً',
+        payment_method: 'فودافون كاش',
+        notes: 'القسط الأخير فودافون كاش',
       }),
     });
 
@@ -301,10 +307,13 @@ test('POST /api/sales/:id/payments records payment and updates sale status to co
     assert.equal(body.success, true);
     assert.equal(body.data.payment.amount, 1000);
     assert.equal(body.data.payment.payment_month, '2026-11-01');
+    assert.equal(body.data.payment.payment_method, 'فودافون كاش');
+    assert.equal(body.data.payment.collection_branch_id, 1);
+    assert.equal(body.data.payment.collection_branch_name, 'ريتاج');
     assert.equal(body.data.summary.required_installments_total, 5000);
     assert.equal(body.data.summary.total_paid, 5000);
     assert.equal(body.data.summary.remaining_balance, 0);
-    assert.equal(body.data.summary.sale_status, 'completed');
+    assert.equal(body.data.summary.sale_status, 'منتهي');
     assert.equal(body.data.summary.is_completed, true);
   } finally {
     server.close();
@@ -812,7 +821,7 @@ test('POST /api/sales ignores any client id and requires invoice_number', async 
   }
 });
 
-test('GET /api/sales/:id and GET /api/sales?invoice_number=... return full invoice details', async () => {
+test('GET /api/sales?invoice_number=... returns a summary and GET /api/sales/:id returns full details', async () => {
   const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 1 });
 
   let capturedSearchSql = '';
@@ -846,6 +855,16 @@ test('GET /api/sales/:id and GET /api/sales?invoice_number=... return full invoi
     status: 'active',
   };
 
+  const saleSummary = {
+    sale_id: fullSaleRecord.sale_id,
+    invoice_number: fullSaleRecord.invoice_number,
+    customer_name: fullSaleRecord.customer.name,
+    total_paid: fullSaleRecord.total_paid,
+    remaining_amount: fullSaleRecord.remaining_amount,
+    status: fullSaleRecord.status,
+    guarantors: [{ name: 'محمود السيد', phones: [{ phone: '01112345678' }] }],
+  };
+
   const poolMock = {
     async query(sql, params) {
       if (sql.includes('COUNT(*)')) {
@@ -856,7 +875,7 @@ test('GET /api/sales/:id and GET /api/sales?invoice_number=... return full invoi
         return { rows: [fullSaleRecord] };
       }
       capturedSearchSql = sql;
-      return { rows: [fullSaleRecord] };
+      return { rows: [saleSummary] };
     },
   };
 
@@ -890,9 +909,12 @@ test('GET /api/sales/:id and GET /api/sales?invoice_number=... return full invoi
     const searchInvoiceBody = await searchInvoiceRes.json();
     assert.equal(searchInvoiceBody.success, true);
     assert.equal(searchInvoiceBody.data[0].invoice_number, 'A116');
+    assert.deepEqual(searchInvoiceBody.data[0].guarantors, saleSummary.guarantors);
+    assert.equal(searchInvoiceBody.data[0].payments, undefined);
+    assert.equal(searchInvoiceBody.data[0].notes, undefined);
     assert.match(capturedSearchSql, /AS guarantors/);
-    assert.match(capturedSearchSql, /AS payments/);
-    assert.match(capturedSearchSql, /AS notes/);
+    assert.doesNotMatch(capturedSearchSql, /AS payments/);
+    assert.doesNotMatch(capturedSearchSql, /AS notes/);
   } finally {
     server.close();
   }
@@ -976,6 +998,214 @@ test('GET /api/sales/follow-up filters overdue sales with due_day <= day (defaul
     const defaultBody = await defaultRes.json();
     assert.equal(defaultBody.filter_day, 18);
     assert.deepEqual(capturedCountParams, [18, 2]);
+  } finally {
+    server.close();
+  }
+});
+
+test('PATCH /api/sales/:id/status allows only admin and follow_up, normalizes متاخر, and protects منتهي', async () => {
+  const empAuth = createAuthFixture({ role: 'employee', branchId: 1 });
+  const followUpAuth = createAuthFixture({ role: 'follow_up', branchId: 1 });
+
+  let currentStatus = 'حالي';
+  let saleBranchId = 1;
+
+  const fakeClient = {
+    async query(sql, params) {
+      if (sql.includes('FROM sales WHERE id = $1') || sql.includes('FROM sales WHERE LOWER(invoice_number)')) {
+        return {
+          rows: [{ id: 10, invoice_number: 'A116', branch_id: saleBranchId, status: currentStatus }],
+        };
+      }
+      if (sql.includes('UPDATE sales SET status = $1')) {
+        currentStatus = params[0];
+        return {
+          rows: [{ id: 10, invoice_number: 'A116', branch_id: saleBranchId, status: currentStatus, updated_at: new Date().toISOString() }],
+        };
+      }
+      return { rows: [] };
+    },
+    release() {},
+  };
+
+  const poolMock = {
+    async connect() {
+      return fakeClient;
+    },
+  };
+
+  // 1. Regular employee must be rejected with 403
+  const empApp = createTestApp(poolMock, empAuth.auth);
+  const empServer = empApp.listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${empServer.address().port}/api/sales/A116/status`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${empAuth.validToken}`,
+        'x-device-id': empAuth.deviceId,
+      },
+      body: JSON.stringify({ status: 'منتظم' }),
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    empServer.close();
+  }
+
+  // 2. Follow-up employee can update status and normalize 'متاخر' -> 'متأخر'
+  const followApp = createTestApp(poolMock, followUpAuth.auth);
+  const followServer = followApp.listen(0);
+  const baseUrl = `http://127.0.0.1:${followServer.address().port}/api/sales/A116/status`;
+  try {
+    const res1 = await fetch(baseUrl, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${followUpAuth.validToken}`,
+        'x-device-id': followUpAuth.deviceId,
+      },
+      body: JSON.stringify({ status: 'متاخر' }),
+    });
+    assert.equal(res1.status, 200);
+    const body1 = await res1.json();
+    assert.equal(body1.data.status, 'متأخر');
+
+    // 3. Cannot manually set 'منتهي'
+    const resManualEnd = await fetch(baseUrl, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${followUpAuth.validToken}`,
+        'x-device-id': followUpAuth.deviceId,
+      },
+      body: JSON.stringify({ status: 'منتهي' }),
+    });
+    assert.equal(resManualEnd.status, 400);
+
+    // 4. Cannot modify an already 'منتهي' sale
+    currentStatus = 'منتهي';
+    const resLocked = await fetch(baseUrl, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${followUpAuth.validToken}`,
+        'x-device-id': followUpAuth.deviceId,
+      },
+      body: JSON.stringify({ status: 'محامي' }),
+    });
+    assert.equal(resLocked.status, 400);
+
+    // 5. Cross-branch follow_up user is blocked with 403
+    currentStatus = 'حالي';
+    saleBranchId = 99;
+    const resCross = await fetch(baseUrl, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${followUpAuth.validToken}`,
+        'x-device-id': followUpAuth.deviceId,
+      },
+      body: JSON.stringify({ status: 'منتظم' }),
+    });
+    assert.equal(resCross.status, 403);
+  } finally {
+    followServer.close();
+  }
+});
+
+test('GET /api/sales/daily-summary calculates cash, vodafone_cash, and by_branch totals scoped by collection branch', async () => {
+  const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
+
+  let capturedParams = null;
+  let capturedWhereSql = '';
+  const poolMock = {
+    async query(sql, params) {
+      capturedParams = params;
+      if (sql.includes('GROUP BY COALESCE(p.collection_branch_id, s.branch_id)')) {
+        return {
+          rows: [{
+            branch_id: 2,
+            branch_name: 'الإصلاح',
+            total_amount: '2500.00',
+            payments_count: 3,
+            cash_total: '1500.00',
+            cash_count: 2,
+            vodafone_cash_total: '1000.00',
+            vodafone_cash_count: 1,
+          }],
+        };
+      }
+      if (sql.includes('COALESCE(SUM(p.amount), 0) AS total_amount')) {
+        capturedWhereSql = sql;
+        return {
+          rows: [{
+            total_amount: '2500.00',
+            payments_count: 3,
+            cash_total: '1500.00',
+            cash_count: 2,
+            vodafone_cash_total: '1000.00',
+            vodafone_cash_count: 1,
+          }],
+        };
+      }
+      return {
+        rows: [
+          {
+            id: 1,
+            sale_id: 50,
+            invoice_number: 'A116',
+            collection_branch_id: 2,
+            collection_branch_name: 'الإصلاح',
+            sale_branch_id: 2,
+            sale_branch_name: 'الإصلاح',
+            amount: '1000.00',
+            payment_method: 'فودافون كاش',
+            payment_date: '2026-11-27',
+          },
+          {
+            id: 2,
+            sale_id: 51,
+            invoice_number: 'A117',
+            collection_branch_id: 2,
+            collection_branch_name: 'الإصلاح',
+            sale_branch_id: 1,
+            sale_branch_name: 'ريتاج',
+            amount: '1500.00',
+            payment_method: 'كاش',
+            payment_date: '2026-11-27',
+          },
+        ],
+      };
+    },
+  };
+
+  const app = createTestApp(poolMock, auth);
+  const server = app.listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/sales/daily-summary?date=2026-11-27&branch_id=1`, {
+      headers: {
+        authorization: `Bearer ${validToken}`,
+        'x-device-id': deviceId,
+      },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.success, true);
+    assert.equal(body.date, '2026-11-27');
+    assert.equal(body.branch_id, 2);
+    assert.deepEqual(capturedParams, ['2026-11-27', 2]);
+    assert.match(capturedWhereSql, /COALESCE\(p\.collection_branch_id, s\.branch_id\) = \$2/);
+    assert.equal(body.summary.total_amount, 2500);
+    assert.equal(body.summary.payments_count, 3);
+    assert.equal(body.summary.cash.total, 1500);
+    assert.equal(body.summary.cash.count, 2);
+    assert.equal(body.summary.vodafone_cash.total, 1000);
+    assert.equal(body.summary.vodafone_cash.count, 1);
+    assert.equal(body.by_branch.length, 1);
+    assert.equal(body.by_branch[0].branch_name, 'الإصلاح');
+    assert.equal(body.by_branch[0].cash.total, 1500);
+    assert.equal(body.by_branch[0].vodafone_cash.total, 1000);
+    assert.equal(body.payments.length, 2);
   } finally {
     server.close();
   }

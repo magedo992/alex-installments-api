@@ -63,8 +63,8 @@ const registerUserSchema = z.object({
   username: z.string({ required_error: 'اسم المستخدم إلزامي' }).min(1, 'اسم المستخدم إلزامي').max(100, 'اسم المستخدم طويل جداً').trim(),
   email: z.string({ required_error: 'البريد الإلكتروني إلزامي' }).email('أدخل بريداً إلكترونياً صالحاً').max(254).trim(),
   password: z.string({ required_error: 'كلمة المرور إلزامية' }).min(8, 'كلمة المرور يجب ألا تقل عن 8 أحرف').max(72, 'كلمة المرور لا تتجاوز 72 حرفاً'),
-  role: z.enum(['admin', 'employee', 'accountant'], {
-    invalid_type_error: 'الدور يجب أن يكون admin أو employee أو accountant',
+  role: z.enum(['admin', 'employee', 'accountant', 'follow_up'], {
+    invalid_type_error: 'الدور يجب أن يكون admin أو employee أو accountant أو follow_up',
   }).optional().default('employee'),
   branch_id: z.number({ invalid_type_error: 'معرف الفرع يجب أن يكون رقماً' }).int().positive('معرف الفرع يجب أن يكون رقماً موجباً').optional().nullable(),
   device_id: z.string()
@@ -126,15 +126,66 @@ const createSaleSchema = z.object({
   }).optional().nullable(),
 });
 
+const SALE_STATUSES = ['حالي', 'منتظم', 'متأخر', 'منتهي', 'محامي'];
+const EDITABLE_SALE_STATUSES = ['حالي', 'منتظم', 'متأخر', 'محامي'];
+const PAYMENT_METHODS = ['كاش', 'فودافون كاش'];
+
+function normalizeSaleStatusInput(val) {
+  if (typeof val !== 'string') return val;
+  const trimmed = val.trim();
+  const map = {
+    'حالى': 'حالي',
+    'متاخر': 'متأخر',
+    'منتهى': 'منتهي',
+    'محامى': 'محامي',
+  };
+  return map[trimmed] || trimmed;
+}
+
+function normalizePaymentMethodInput(val) {
+  if (typeof val !== 'string') return val;
+  const trimmed = val.trim();
+  if (trimmed === 'فودافون_كاش') return 'فودافون كاش';
+  return trimmed;
+}
+
+const saleStatusFilterSchema = z.preprocess(
+  normalizeSaleStatusInput,
+  z.enum(SALE_STATUSES, { invalid_type_error: 'حالة الفاتورة غير صالحة' })
+).optional();
+
+const updateSaleStatusSchema = z.object({
+  status: z.preprocess(
+    normalizeSaleStatusInput,
+    z.enum(EDITABLE_SALE_STATUSES, {
+      required_error: 'حالة الفاتورة (status) إلزامية',
+      invalid_type_error: 'الحالة المسموح بتعديلها يدوياً هي: حالي، منتظم، متأخر، محامي فقط (حالة منتهي تُحدث تلقائياً عند السداد)',
+    })
+  ),
+});
+
 const recordPaymentSchema = z.object({
   amount: z.number({ required_error: 'قيمة الدفعة إلزامية' }).positive('قيمة الدفعة يجب أن تكون أكبر من صفر'),
   payment_date: z.string().regex(dateRegex, 'صيغة تاريخ الدفع يجب أن تكون YYYY-MM-DD').optional(),
+  payment_method: z.preprocess(
+    normalizePaymentMethodInput,
+    z.enum(PAYMENT_METHODS, {
+      invalid_type_error: 'طريقة الدفع يجب أن تكون كاش أو فودافون كاش',
+    })
+  ).optional().default('كاش'),
+  collection_branch_id: z.number({ invalid_type_error: 'معرف فرع التحصيل يجب أن يكون رقماً' }).int().positive('معرف فرع التحصيل يجب أن يكون رقماً موجباً').optional().nullable(),
   notes: z.string().max(500, 'الملاحظة طويلة جداً').optional().nullable(),
+});
+
+const dailySummarySchema = z.object({
+  date: z.string().regex(dateRegex, 'صيغة التاريخ يجب أن تكون YYYY-MM-DD').optional(),
+  branch_id: z.coerce.number().int().positive().optional(),
 });
 
 const overdueSalesSchema = z.object({
   branch_id: z.coerce.number().int().positive().optional(),
   due_day: z.coerce.number().int().min(1).max(31).optional(),
+  status: saleStatusFilterSchema,
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -143,6 +194,7 @@ const followUpSalesSchema = z.object({
   branch_id: z.coerce.number().int().positive().optional(),
   day: z.coerce.number().int().min(1, 'اليوم يجب أن يكون بين 1 و 31').max(31, 'اليوم يجب أن يكون بين 1 و 31').optional(),
   date: z.string().regex(dateRegex, 'صيغة التاريخ يجب أن تكون YYYY-MM-DD').optional(),
+  status: saleStatusFilterSchema,
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -151,6 +203,7 @@ const searchSalesSchema = z.object({
   invoice_number: z.string().max(50).trim().optional(),
   q: z.string().max(100).trim().optional(),
   branch_id: z.coerce.number().int().positive().optional(),
+  status: saleStatusFilterSchema,
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -184,6 +237,8 @@ module.exports = {
   saleDetailsParamsSchema,
   saleByInvoiceParamsSchema,
   recordPaymentSchema,
+  updateSaleStatusSchema,
+  dailySummarySchema,
   overdueSalesSchema,
   followUpSalesSchema,
   addNoteSchema,

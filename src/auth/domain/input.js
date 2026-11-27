@@ -39,7 +39,7 @@ function registrationInput({ username, email, password, deviceId, role, branchId
   if (deviceId !== null && !isDeviceId(deviceId)) {
     throw new AuthError('INVALID_INPUT', 'معرف الجهاز (x-device-id) مفقود أو غير صالح', 'x-device-id');
   }
-  const validRoles = ['admin', 'employee', 'accountant'];
+  const validRoles = ['admin', 'employee', 'accountant', 'follow_up'];
   const assignedRole = validRoles.includes(role) ? role : 'employee';
   const assignedBranchId = branchId ?? branch_id ?? null;
   return { username: name, email: address, password, deviceId: deviceId || null, role: assignedRole, branchId: assignedBranchId };

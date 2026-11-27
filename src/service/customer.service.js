@@ -112,6 +112,9 @@ function createCustomerService(pool) {
 
     const conditions = [];
     const params = [];
+    let customerMatch = '';
+    let invoiceMatchIndex = null;
+    let branchParamIndex = null;
 
     if (q && typeof q === 'string' && q.trim().length > 0) {
       const cleanQ = q.trim();
@@ -121,18 +124,28 @@ function createCustomerService(pool) {
       const p1Index = params.length + 1;
       params.push(`%${normalizedQ}%`);
       const p2Index = params.length + 1;
-      params.push(`%${cleanQ}%`);
+      params.push(`%${asciiQ}%`);
       const p3Index = params.length + 1;
       params.push(`%${asciiQ}%`);
 
-      conditions.push(`(
+      customerMatch = `(
         c.normalized_name ILIKE $${p1Index} 
         OR c.customer_code ILIKE $${p2Index} 
         OR EXISTS (
           SELECT 1 FROM phone_numbers pn 
           WHERE pn.customer_id = c.id AND pn.phone ILIKE $${p3Index}
         )
-      )`);
+      )`;
+      invoiceMatchIndex = p3Index;
+      if (effectiveBranchId) {
+        params.push(effectiveBranchId);
+        branchParamIndex = params.length;
+      }
+      const invoiceBranchFilter = branchParamIndex ? ` AND s.branch_id = $${branchParamIndex}` : '';
+      conditions.push(`(${customerMatch} OR EXISTS (
+        SELECT 1 FROM sales s
+        WHERE s.customer_id = c.id AND s.invoice_number ILIKE $${invoiceMatchIndex}${invoiceBranchFilter}
+      ))`);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -146,13 +159,16 @@ function createCustomerService(pool) {
     const offsetParamIdx = dataParams.length;
 
     let branchFilterSales = '';
-    let branchFilterGuarantors = '';
     if (effectiveBranchId) {
-      dataParams.push(effectiveBranchId);
-      const branchParamIdx = dataParams.length;
-      branchFilterSales = ` AND sb.branch_id = $${branchParamIdx}`;
-      branchFilterGuarantors = ` AND s.branch_id = $${branchParamIdx}`;
+      if (!branchParamIndex) {
+        dataParams.push(effectiveBranchId);
+        branchParamIndex = dataParams.length;
+      }
+      branchFilterSales = ` AND sb.branch_id = $${branchParamIndex}`;
     }
+    const invoiceFilterSales = customerMatch
+      ? ` AND (${customerMatch} OR sb.invoice_number ILIKE $${invoiceMatchIndex})`
+      : '';
 
     const dataSql = `
       SELECT 
@@ -190,32 +206,6 @@ function createCustomerService(pool) {
         COALESCE(
           (
             SELECT json_agg(json_build_object(
-              'id', g.id,
-              'sale_id', g.sale_id,
-              'invoice_number', s.invoice_number,
-              'name', g.name,
-              'created_at', g.created_at,
-              'phones', COALESCE(
-                (
-                  SELECT json_agg(json_build_object(
-                    'id', gpn.id,
-                    'phone', gpn.phone,
-                    'is_primary', gpn.is_primary,
-                    'label', gpn.label
-                  ) ORDER BY gpn.is_primary DESC, gpn.id ASC)
-                  FROM phone_numbers gpn
-                  WHERE gpn.guarantor_id = g.id
-                ), '[]'::json
-              )
-            ) ORDER BY g.id DESC)
-            FROM guarantors g
-            JOIN sales s ON s.id = g.sale_id
-            WHERE s.customer_id = c.id${branchFilterGuarantors}
-          ), '[]'::json
-        ) AS guarantors,
-        COALESCE(
-          (
-            SELECT json_agg(json_build_object(
               'sale_id', sb.sale_id,
               'invoice_number', sb.invoice_number,
               'branch_id', sb.branch_id,
@@ -238,11 +228,24 @@ function createCustomerService(pool) {
               'due_installments', sb.due_installments,
               'due_amount', sb.due_amount,
               'overdue_amount', sb.overdue_amount,
-              'created_at', sb.created_at
+              'created_at', sb.created_at,
+              'guarantors', COALESCE((
+                SELECT json_agg(json_build_object(
+                  'name', g.name,
+                  'phones', COALESCE((
+                    SELECT json_agg(json_build_object('phone', gpn.phone)
+                      ORDER BY gpn.is_primary DESC, gpn.id ASC)
+                    FROM phone_numbers gpn
+                    WHERE gpn.guarantor_id = g.id
+                  ), '[]'::json)
+                ) ORDER BY g.id ASC)
+                FROM guarantors g
+                WHERE g.sale_id = sb.sale_id
+              ), '[]'::json)
             ) ORDER BY sb.sale_id DESC)
             FROM sale_balances sb
             LEFT JOIN branches b ON b.id = sb.branch_id
-            WHERE sb.customer_id = c.id${branchFilterSales}
+            WHERE sb.customer_id = c.id${branchFilterSales}${invoiceFilterSales}
           ), '[]'::json
         ) AS sales
       FROM customers c

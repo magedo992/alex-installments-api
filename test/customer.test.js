@@ -432,7 +432,7 @@ test('POST /api/customers rejects invalid phone numbers or short customer names 
   }
 });
 
-test('GET /api/customers returns customer guarantors and sales scoped by branch', async () => {
+test('GET /api/customers returns each invoice with its own guarantors scoped by branch', async () => {
   const { auth, validToken, deviceId } = createAuthFixture({ role: 'employee', branchId: 2 });
 
   let capturedDataSql = '';
@@ -445,15 +445,6 @@ test('GET /api/customers returns customer guarantors and sales scoped by branch'
       normalized_name: 'احمد محمود',
       phones: [{ id: 10, phone: '01012345678', is_primary: true, label: 'شخصي' }],
       current_address: { id: 20, area: 'الاصلاح', housing_type: 'ملك', address_details: null },
-      guarantors: [
-        {
-          id: 5,
-          sale_id: 50,
-          invoice_number: 'A116',
-          name: 'محمود السيد',
-          phones: [{ id: 11, phone: '01112345678', is_primary: true, label: 'موبايل' }],
-        },
-      ],
       sales: [
         {
           sale_id: 50,
@@ -463,6 +454,12 @@ test('GET /api/customers returns customer guarantors and sales scoped by branch'
           item_details: 'ثلاجة',
           remaining_amount: 4000,
           status: 'active',
+          guarantors: [{ name: 'محمود السيد', phones: [{ phone: '01112345678' }] }],
+        },
+        {
+          sale_id: 51,
+          invoice_number: 'A117',
+          guarantors: [],
         },
       ],
     },
@@ -493,14 +490,57 @@ test('GET /api/customers returns customer guarantors and sales scoped by branch'
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.success, true);
-    assert.equal(body.data[0].guarantors.length, 1);
-    assert.equal(body.data[0].guarantors[0].name, 'محمود السيد');
-    assert.equal(body.data[0].sales.length, 1);
+    assert.equal(body.data[0].guarantors, undefined);
+    assert.deepEqual(body.data[0].sales[0].guarantors, [
+      { name: 'محمود السيد', phones: [{ phone: '01112345678' }] },
+    ]);
+    assert.deepEqual(body.data[0].sales[1].guarantors, []);
+    assert.equal(body.data[0].sales.length, 2);
     assert.equal(body.data[0].sales[0].invoice_number, 'A116');
-    assert.match(capturedDataSql, /AS guarantors/);
+    assert.doesNotMatch(capturedDataSql, /AS guarantors/);
+    assert.match(capturedDataSql, /'guarantors', COALESCE/);
+    assert.match(capturedDataSql, /g.sale_id = sb.sale_id/);
+    assert.match(capturedDataSql, /json_build_object\('phone', gpn.phone\)/);
     assert.match(capturedDataSql, /AS sales/);
-    assert.equal(capturedDataParams[capturedDataParams.length - 1], 2);
+    assert.match(capturedDataSql, /sb.branch_id = \$4/);
+    assert.deepEqual(capturedDataParams, ['%01012345678%', '%01012345678%', '%01012345678%', 2, 20, 0]);
   } finally {
     server.close();
   }
+});
+
+test('customer search normalizes all terms and filters invoice matches within the branch in count and data', async () => {
+  const { createCustomerService } = require('../src/service/customer.service');
+  const calls = [];
+  const service = createCustomerService({
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return { rows: sql.includes('COUNT(*)') ? [{ total: 0 }] : [] };
+    },
+  });
+  for (const [q, normalized, ascii] of [
+    [' A١١٦ ', 'a116', 'A116'],
+    ['أَحْمَد', 'احمد', 'أَحْمَد'],
+    ['٣٠٠٠٠٠١', '3000001', '3000001'],
+    ['٠١٠١٢٣٤٥٦٧٨', '01012345678', '01012345678'],
+  ]) {
+    const result = await service.searchCustomers({ user: { branchId: 2 }, q, page: 2, limit: 5 });
+    const [count, data] = calls.slice(-2);
+    assert.deepEqual(count.params, [`%${normalized}%`, `%${ascii}%`, `%${ascii}%`, 2]);
+    assert.deepEqual(data.params, [...count.params, 5, 5]);
+    assert.match(count.sql, /s.customer_id = c.id AND s.invoice_number ILIKE \$3 AND s.branch_id = \$4/);
+    assert.match(data.sql, /WHERE sb.customer_id = c.id AND sb.branch_id = \$4 AND \(/);
+    assert.match(data.sql, /c.normalized_name ILIKE \$1[\s\S]*OR sb.invoice_number ILIKE \$3/);
+    assert.match(data.sql, /LIMIT \$5 OFFSET \$6/);
+    assert.deepEqual(result.data, []);
+  }
+  await service.searchCustomers({ user: { branch_id: 2 } });
+  assert.deepEqual(calls.at(-2).params, []);
+  assert.deepEqual(calls.at(-1).params, [20, 0, 2]);
+  assert.match(calls.at(-1).sql, /sb.branch_id = \$3/);
+
+  await service.searchCustomers({ user: { role: 'admin' }, q: 'A116' });
+  assert.deepEqual(calls.at(-2).params, ['%a116%', '%A116%', '%A116%']);
+  assert.doesNotMatch(calls.at(-2).sql, /s.branch_id/);
+  assert.doesNotMatch(calls.at(-1).sql, /sb.branch_id =/);
 });
