@@ -256,6 +256,21 @@ node scripts/create-admin.js
 
 ---
 
+## اختبارات الفلو وPipeline
+
+```powershell
+npm test
+npm run test:workflow
+npm run build
+$env:PIPELINE_BASE_URL = 'http://localhost:5000'
+$env:PIPELINE_ORIGIN = 'http://localhost:5173'
+npm run test:pipeline -- --report outputs/testing/pipeline-results.json
+```
+
+`test:pipeline` يجمع فحص الصياغة والاختبارات المحلية، ثم يتحقق من قاعدة PostgreSQL الفعلية باتصال قراءة فقط ومن السيرفر الجاري وإعدادات CORS. يحتاج `DATABASE_URL` وسيرفرًا شغالًا، ويرجع exit code 1 عند فشل أي مرحلة. لا يطبق migrations ولا ينشئ بيانات أعمال. نجاح الاختبارات المحلية وحدها لا يثبت جاهزية التكامل.
+
+الحالات وحدود التغطية في [docs/WORKFLOW_TEST_CASES.md](docs/WORKFLOW_TEST_CASES.md)، ونتائج التنفيذ في [docs/PIPELINE_TEST_REPORT.md](docs/PIPELINE_TEST_REPORT.md).
+
 ## 📖 التوثيق التفاعلي واختبار الـ API (Swagger UI)
 
 بمجرد تشغيل السيرفر، يتوفر توثيق حي وتفاعلي يتيح تجربة كافة المسارات مباشرة:

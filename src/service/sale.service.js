@@ -490,27 +490,49 @@ function createSaleService(pool) {
     }
   }
 
-  async function getDailySummary({ user, query = {} }) {
-    const { date, branch_id } = query;
-
+  function resolveSummaryBranchScope(user, requestedBranchId, label, allowedUnscopedRoles = ['admin', 'accountant', 'follow_up']) {
     const userBranch = user?.branch_id ?? user?.branchId;
     const hasBranch = userBranch !== null && userBranch !== undefined;
-    let effectiveBranchId = null;
 
     if (hasBranch) {
-      effectiveBranchId = Number(userBranch);
+      const effectiveBranchId = Number(userBranch);
       if (!Number.isSafeInteger(effectiveBranchId) || effectiveBranchId <= 0) {
-        const forbiddenErr = new Error('غير مصرح لك بعرض اليومية دون فرع صالح');
+        const forbiddenErr = new Error(`غير مصرح لك بعرض ${label} دون فرع صالح`);
         forbiddenErr.statusCode = 403;
         throw forbiddenErr;
       }
-    } else if (!['admin', 'accountant', 'follow_up'].includes(user?.role)) {
-      const forbiddenErr = new Error('غير مصرح لك بعرض اليومية دون فرع محدد');
+      return effectiveBranchId;
+    }
+
+    if (!allowedUnscopedRoles.includes(user?.role)) {
+      const forbiddenErr = new Error(`غير مصرح لك بعرض ${label} دون فرع محدد`);
       forbiddenErr.statusCode = 403;
       throw forbiddenErr;
-    } else if (branch_id) {
-      effectiveBranchId = Number(branch_id);
     }
+
+    return requestedBranchId ? Number(requestedBranchId) : null;
+  }
+
+  function mapBranchSummaryRow(b) {
+    return {
+      branch_id: b.branch_id !== null ? Number(b.branch_id) : null,
+      branch_name: b.branch_name ?? null,
+      total_amount: Number(b.total_amount || 0),
+      payments_count: Number(b.payments_count || 0),
+      cash: {
+        total: Number(b.cash_total || 0),
+        count: Number(b.cash_count || 0),
+      },
+      vodafone_cash: {
+        total: Number(b.vodafone_cash_total || 0),
+        count: Number(b.vodafone_cash_count || 0),
+      },
+    };
+  }
+
+  async function getDailySummary({ user, query = {} }) {
+    const { date, branch_id } = query;
+    const effectiveBranchId = resolveSummaryBranchScope(user, branch_id, 'اليومية');
 
     const targetDate = date && /^\d{4}-\d{2}-\d{2}$/.test(String(date))
       ? String(date)
@@ -602,21 +624,87 @@ function createSaleService(pool) {
           count: Number(row.vodafone_cash_count || 0),
         },
       },
-      by_branch: byBranchRes.rows.map((b) => ({
-        branch_id: b.branch_id !== null ? Number(b.branch_id) : null,
-        branch_name: b.branch_name ?? null,
-        total_amount: Number(b.total_amount || 0),
-        payments_count: Number(b.payments_count || 0),
-        cash: {
-          total: Number(b.cash_total || 0),
-          count: Number(b.cash_count || 0),
-        },
-        vodafone_cash: {
-          total: Number(b.vodafone_cash_total || 0),
-          count: Number(b.vodafone_cash_count || 0),
-        },
-      })),
+      by_branch: byBranchRes.rows.map(mapBranchSummaryRow),
       payments: listRes.rows,
+    };
+  }
+
+  async function getMonthlySummary({ user, query = {} }) {
+    if (user?.role === 'follow_up') {
+      const forbiddenErr = new Error('غير مصرح لحساب المتابعة بعرض التحصيل الشهري');
+      forbiddenErr.statusCode = 403;
+      throw forbiddenErr;
+    }
+    const { month, branch_id } = query;
+    const effectiveBranchId = resolveSummaryBranchScope(user, branch_id, 'التحصيل الشهري', ['admin', 'accountant']);
+
+    const targetMonth = month && /^\d{4}-(0[1-9]|1[0-2])$/.test(String(month))
+      ? String(month)
+      : new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date()).slice(0, 7);
+    const monthStart = `${targetMonth}-01`;
+
+    const params = [monthStart];
+    let branchFilter = '';
+    if (effectiveBranchId) {
+      params.push(effectiveBranchId);
+      branchFilter = `WHERE b.id = $2`;
+    }
+
+    const sql = `
+      WITH monthly_payments AS (
+        SELECT
+          COALESCE(p.collection_branch_id, s.branch_id) AS branch_id,
+          p.amount,
+          p.payment_method
+        FROM payments p
+        JOIN sales s ON s.id = p.sale_id
+        WHERE p.payment_date >= $1::date
+          AND p.payment_date < ($1::date + INTERVAL '1 month')
+      )
+      SELECT
+        b.id AS branch_id,
+        b.name AS branch_name,
+        COALESCE(SUM(mp.amount), 0) AS total_amount,
+        COUNT(mp.amount)::int AS payments_count,
+        COALESCE(SUM(CASE WHEN mp.payment_method = 'كاش' THEN mp.amount ELSE 0 END), 0) AS cash_total,
+        COUNT(CASE WHEN mp.payment_method = 'كاش' THEN 1 END)::int AS cash_count,
+        COALESCE(SUM(CASE WHEN mp.payment_method = 'فودافون كاش' THEN mp.amount ELSE 0 END), 0) AS vodafone_cash_total,
+        COUNT(CASE WHEN mp.payment_method = 'فودافون كاش' THEN 1 END)::int AS vodafone_cash_count
+      FROM branches b
+      LEFT JOIN monthly_payments mp ON mp.branch_id = b.id
+      ${branchFilter}
+      GROUP BY b.id, b.name
+      ORDER BY b.id ASC
+    `;
+
+    const res = await pool.query(sql, params);
+    const byBranch = res.rows.map(mapBranchSummaryRow);
+
+    const summary = byBranch.reduce(
+      (acc, b) => {
+        acc.total_amount += b.total_amount;
+        acc.payments_count += b.payments_count;
+        acc.cash.total += b.cash.total;
+        acc.cash.count += b.cash.count;
+        acc.vodafone_cash.total += b.vodafone_cash.total;
+        acc.vodafone_cash.count += b.vodafone_cash.count;
+        return acc;
+      },
+      {
+        branches_count: byBranch.length,
+        total_amount: 0,
+        payments_count: 0,
+        cash: { total: 0, count: 0 },
+        vodafone_cash: { total: 0, count: 0 },
+      }
+    );
+
+    return {
+      month: targetMonth,
+      branch_id: effectiveBranchId,
+      branches_count: byBranch.length,
+      summary,
+      by_branch: byBranch,
     };
   }
 
@@ -1083,6 +1171,7 @@ function createSaleService(pool) {
     recordPayment,
     updateSaleStatus,
     getDailySummary,
+    getMonthlySummary,
     getOverdueSales,
     getFollowUpSales,
     addSaleNote,

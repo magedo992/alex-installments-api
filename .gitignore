@@ -6,3 +6,5 @@ node_modules/
 .neon/
 *.xlsx
 *.xlsm
+outputs/
+docs/

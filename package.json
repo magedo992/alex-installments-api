@@ -8,6 +8,10 @@
     "start:dev": "nodemon src/index.js",
     "test:db": "node src/config/verify-db.js",
     "test": "node --test",
+    "test:workflow": "node --test test/workflow.test.js",
+    "test:db:workflow": "node scripts/check-pipeline-db.js",
+    "test:http": "node scripts/check-pipeline-http.js",
+    "test:pipeline": "node scripts/run-pipeline.js",
     "build": "node scripts/build.js",
     "db:migrate": "node scripts/migrate.js",
     "keep-alive": "node scripts/ping-server.js"

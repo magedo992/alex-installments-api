@@ -1241,6 +1241,68 @@ const swaggerDocument = {
         },
       },
     },
+    '/api/sales/monthly-summary': {
+      get: {
+        tags: ['Sales'],
+        summary: 'حساب التحصيل الشهري لكل فرع والإجمالي العام (كاش وفودافون كاش)',
+        description: 'يرجع عدد الفروع وتحصيل كل فرع خلال شهر محدد (الافتراضي الشهر الحالي بتوقيت القاهرة) مقسماً بين كاش وفودافون كاش، بالإضافة إلى المجموع العام في summary. للأدمن والمحاسب يعرض كل الفروع، ولموظف الفرع يعرض فرعه فقط (غير متاح لحساب المتابعة).',
+        security: [{ bearerAuth: [], deviceIdAuth: [] }],
+        parameters: [
+          {
+            name: 'x-device-id',
+            in: 'header',
+            required: false,
+            description: 'بصمة الجهاز (إلزامية لغير الأدمن، وغير مطلوبة للأدمن)',
+            schema: { type: 'string', example: 'device-unique-fingerprint-123' },
+          },
+          { name: 'month', in: 'query', required: false, description: 'الشهر بصيغة YYYY-MM (الافتراضي الشهر الحالي بتوقيت القاهرة)', schema: { type: 'string', example: '2026-11' } },
+          { name: 'branch_id', in: 'query', required: false, description: 'معرف فرع التحصيل (اختياري للأدمن والمحاسب بدون فرع؛ موظف الفرع يُحدد فرعه تلقائياً)', schema: { type: 'integer', example: 2 } },
+        ],
+        responses: {
+          200: {
+            description: 'تم حساب التحصيل الشهري بنجاح',
+            content: {
+              'application/json': {
+                example: {
+                  success: true,
+                  month: '2026-11',
+                  branch_id: null,
+                  branches_count: 4,
+                  summary: {
+                    branches_count: 4,
+                    total_amount: 371799,
+                    payments_count: 234,
+                    cash: { total: 355559, count: 220 },
+                    vodafone_cash: { total: 16240, count: 14 },
+                  },
+                  by_branch: [
+                    {
+                      branch_id: 1,
+                      branch_name: 'الحمد',
+                      total_amount: 50480,
+                      payments_count: 56,
+                      cash: { total: 50480, count: 56 },
+                      vodafone_cash: { total: 0, count: 0 },
+                    },
+                    {
+                      branch_id: 2,
+                      branch_name: 'الاصلاح',
+                      total_amount: 102944,
+                      payments_count: 107,
+                      cash: { total: 86704, count: 93 },
+                      vodafone_cash: { total: 16240, count: 14 },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+          400: { description: 'صيغة الشهر أو معرف الفرع غير صالح' },
+          401: { description: 'غير مصرح بالدخول' },
+          403: { description: 'غير مصرح لك بعرض التحصيل الشهري أو الجهاز غير مطابق' },
+        },
+      },
+    },
     '/api/sales/follow-up': {
       get: {
         tags: ['Sales'],

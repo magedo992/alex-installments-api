@@ -1210,3 +1210,131 @@ test('GET /api/sales/daily-summary calculates cash, vodafone_cash, and by_branch
     server.close();
   }
 });
+
+test('GET /api/sales/monthly-summary returns all branches, branches_count, and grand total for admin, and scopes branch employee', async () => {
+  const { auth: adminAuth, validToken: adminToken } = createAuthFixture({ role: 'admin', branchId: null });
+  const { auth: empAuth, validToken: empToken, deviceId: empDevice } = createAuthFixture({ role: 'employee', branchId: 2 });
+
+  const captured = [];
+  const poolMock = {
+    async query(sql, params) {
+      captured.push({ sql, params });
+      if (params.length === 2) {
+        return {
+          rows: [{
+            branch_id: 2,
+            branch_name: 'الاصلاح',
+            total_amount: '102944.00',
+            payments_count: 107,
+            cash_total: '86704.00',
+            cash_count: 93,
+            vodafone_cash_total: '16240.00',
+            vodafone_cash_count: 14,
+          }],
+        };
+      }
+      return {
+        rows: [
+          {
+            branch_id: 1,
+            branch_name: 'الحمد',
+            total_amount: '50480.00',
+            payments_count: 56,
+            cash_total: '50480.00',
+            cash_count: 56,
+            vodafone_cash_total: '0',
+            vodafone_cash_count: 0,
+          },
+          {
+            branch_id: 2,
+            branch_name: 'الاصلاح',
+            total_amount: '102944.00',
+            payments_count: 107,
+            cash_total: '86704.00',
+            cash_count: 93,
+            vodafone_cash_total: '16240.00',
+            vodafone_cash_count: 14,
+          },
+          {
+            branch_id: 3,
+            branch_name: 'العالميه',
+            total_amount: '212025.00',
+            payments_count: 70,
+            cash_total: '212025.00',
+            cash_count: 70,
+            vodafone_cash_total: '0',
+            vodafone_cash_count: 0,
+          },
+          {
+            branch_id: 4,
+            branch_name: 'ريتاج',
+            total_amount: '0',
+            payments_count: 0,
+            cash_total: '0',
+            cash_count: 0,
+            vodafone_cash_total: '0',
+            vodafone_cash_count: 0,
+          },
+        ],
+      };
+    },
+  };
+
+  const adminApp = createTestApp(poolMock, adminAuth);
+  const adminServer = adminApp.listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${adminServer.address().port}/api/sales/monthly-summary?month=2026-11`, {
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.success, true);
+    assert.equal(body.month, '2026-11');
+    assert.equal(body.branch_id, null);
+    assert.equal(body.branches_count, 4);
+    assert.equal(body.summary.branches_count, 4);
+    assert.equal(body.summary.total_amount, 365449);
+    assert.equal(body.summary.payments_count, 233);
+    assert.equal(body.summary.cash.total, 349209);
+    assert.equal(body.summary.vodafone_cash.total, 16240);
+    assert.equal(body.by_branch.length, 4);
+    assert.equal(body.by_branch[3].total_amount, 0);
+    assert.deepEqual(captured[0].params, ['2026-11-01']);
+  } finally {
+    adminServer.close();
+  }
+
+  const empApp = createTestApp(poolMock, empAuth);
+  const empServer = empApp.listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${empServer.address().port}/api/sales/monthly-summary?month=2026-11&branch_id=1`, {
+      headers: {
+        authorization: `Bearer ${empToken}`,
+        'x-device-id': empDevice,
+      },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.branch_id, 2);
+    assert.equal(body.branches_count, 1);
+    assert.equal(body.summary.total_amount, 102944);
+    assert.deepEqual(captured[1].params, ['2026-11-01', 2]);
+  } finally {
+    empServer.close();
+  }
+
+  const { auth: followAuth, validToken: followToken, deviceId: followDevice } = createAuthFixture({ role: 'follow_up', branchId: null });
+  const followApp = createTestApp(poolMock, followAuth);
+  const followServer = followApp.listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${followServer.address().port}/api/sales/monthly-summary?month=2026-11`, {
+      headers: {
+        authorization: `Bearer ${followToken}`,
+        'x-device-id': followDevice,
+      },
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    followServer.close();
+  }
+});

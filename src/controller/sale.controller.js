@@ -133,6 +133,27 @@ function createSaleController(saleService) {
     }
   }
 
+  async function getMonthlySummary(req, res) {
+    try {
+      const result = await saleService.getMonthlySummary({
+        user: req.user,
+        query: req.query,
+      });
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      console.error('[SaleController] MonthlySummary error:', error);
+      const status = error.statusCode || 500;
+      return res.status(status).json({
+        success: false,
+        message: status === 403 ? error.message : 'حدث خطأ أثناء حساب التحصيل الشهري',
+      });
+    }
+  }
+
   async function getOverdue(req, res) {
     try {
       const result = await saleService.getOverdueSales({
@@ -229,6 +250,7 @@ function createSaleController(saleService) {
     recordPayment,
     updateStatus,
     getDailySummary,
+    getMonthlySummary,
     getOverdue,
     getFollowUp,
     addNote,

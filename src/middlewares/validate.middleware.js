@@ -182,6 +182,13 @@ const dailySummarySchema = z.object({
   branch_id: z.coerce.number().int().positive().optional(),
 });
 
+const monthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+const monthlySummarySchema = z.object({
+  month: z.string().regex(monthRegex, 'صيغة الشهر يجب أن تكون YYYY-MM').optional(),
+  branch_id: z.coerce.number().int().positive().optional(),
+});
+
 const overdueSalesSchema = z.object({
   branch_id: z.coerce.number().int().positive().optional(),
   due_day: z.coerce.number().int().min(1).max(31).optional(),
@@ -239,6 +246,7 @@ module.exports = {
   recordPaymentSchema,
   updateSaleStatusSchema,
   dailySummarySchema,
+  monthlySummarySchema,
   overdueSalesSchema,
   followUpSalesSchema,
   addNoteSchema,

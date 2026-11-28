@@ -11,6 +11,7 @@ const {
   recordPaymentSchema,
   updateSaleStatusSchema,
   dailySummarySchema,
+  monthlySummarySchema,
   overdueSalesSchema,
   followUpSalesSchema,
   addNoteSchema,
@@ -28,6 +29,7 @@ function createSaleRoutes(pool, protect) {
   router.post('/:id/payments', protect, validate(recordPaymentSchema), controller.recordPayment);
   router.patch('/:id/status', protect, restrictTo('admin', 'follow_up'), validate(updateSaleStatusSchema), controller.updateStatus);
   router.get('/daily-summary', protect, validate(dailySummarySchema, 'query'), controller.getDailySummary);
+  router.get('/monthly-summary', protect, validate(monthlySummarySchema, 'query'), controller.getMonthlySummary);
   router.get('/overdue', protect, validate(overdueSalesSchema, 'query'), controller.getOverdue);
   router.get('/follow-up', protect, validate(followUpSalesSchema, 'query'), controller.getFollowUp);
   router.get('/by-invoice/:invoice_number', protect, validate(saleByInvoiceParamsSchema, 'params'), controller.getOne);
